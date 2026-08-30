@@ -1,0 +1,129 @@
+[package]
+name = "poster-service"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.98"
+description = "HTTP API that composites custom movie posters from TMDB artwork"
+license = "MIT"
+repository = "https://github.com/ibrahimadlani/ibrahim-posters"
+publish = false
+
+[lib]
+name = "poster_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "poster-service"
+path = "src/main.rs"
+
+[dependencies]
+
+# --- HTTP surface -----------------------------------------------------------
+axum = { version = "0.8.9", features = ["macros"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+tower = { version = "0.5.3", features = ["util"] }
+# catch-panic matters more than usual here: a panic inside an imaging crate
+# would otherwise take down the worker rather than fail one request.
+tower-http = { version = "0.7", features = ["trace", "timeout", "limit", "catch-panic"] }
+
+# --- Upstream artwork -------------------------------------------------------
+# rustls rather than native-tls so the musl release image links statically;
+# openssl-sys is banned in deny.toml for the same reason.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream", "http2"] }
+
+# --- Imaging ----------------------------------------------------------------
+# Dedicated JPEG decoder. Faster than the image crate's JPEG path and exposes
+# header-only dimension reads, which the decompression bomb guard needs before
+# any pixel buffer is allocated.
+zune-jpeg = "0.5.15"
+# PNG and WebP decode only; the JPEG feature is off so the two decoders do not
+# both compile in.
+image = { version = "0.25.10", default-features = false, features = ["png", "webp"] }
+# Runtime SIMD dispatch for Lanczos3 resampling. Roughly an order of magnitude
+# faster than image::imageops at poster dimensions.
+fast_image_resize = "6.1"
+# 2D compositing. Chosen over raqote because resvg already renders into a
+# tiny-skia Pixmap, so the badge rasteriser and the compositor share one buffer
+# type with no conversion.
+tiny-skia = "0.12"
+# Badge text. resvg 0.48 depends on tiny-skia ^0.12, so the versions above are
+# not independent: bumping one requires checking the other still matches.
+resvg = "0.48.1"
+usvg = "0.48.1"
+# Font faces are embedded with include_bytes! and loaded into a private
+# database. System fonts are never consulted, so rendering is identical on a
+# laptop, in CI and in the release image.
+fontdb = { version = "0.24", default-features = false }
+# libwebp binding. No pure-Rust lossy WebP encoder exists -- image-webp is
+# lossless only -- and lossy encoding is required by the size budget. See
+# docs/adr/0004-webp-only-for-v1.md.
+webp = "0.3.1"
+# Row-parallel compositing inside render/. Safe because the whole render call
+# already runs inside spawn_blocking and never touches a tokio worker.
+rayon = "1.12"
+
+# --- Cache keys -------------------------------------------------------------
+# Content addressing, not authentication. Several times faster than SHA-256 on
+# short inputs with a security margin far beyond what this use needs.
+blake3 = "1.8"
+
+# --- Storage ----------------------------------------------------------------
+# Chosen over aws-sdk-s3 for its LocalFileSystem and InMemory backends:
+# integration tests run with no containers and no credentials.
+object_store = { version = "0.14.1", features = ["aws"] }
+
+# --- Concurrency ------------------------------------------------------------
+# Singleflight map. Sharded locking, so concurrent misses on different keys do
+# not contend the way a Mutex<HashMap> would.
+dashmap = "6.2"
+# Bounded in-process cache. Reserved for the escalation path in
+# docs/adr/0003 if specification lookup ever appears in a p99 profile.
+moka = { version = "0.12", features = ["future"] }
+
+# --- Configuration ----------------------------------------------------------
+figment = { version = "0.10.19", features = ["env", "toml"] }
+# Wraps credentials so that #[derive(Debug)] on Config cannot leak them into a
+# log line.
+secrecy = "0.10"
+num_cpus = "1.17"
+
+# --- Errors -----------------------------------------------------------------
+# thiserror in the library for typed, matchable errors; anyhow only in main.rs,
+# where the sole consumer is a human reading a startup failure.
+thiserror = "2.0"
+anyhow = "1.0"
+
+# --- Observability ----------------------------------------------------------
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+
+# --- Serialisation ----------------------------------------------------------
+# serde_json is used for spec persistence and response bodies only. It is
+# deliberately NOT used to produce cache key input: map ordering and float
+# formatting carry no cross-version stability guarantee, and a silent change
+# in either would orphan the entire cache. See docs/adr/0005.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+# Drives the router through tower::ServiceExt::oneshot, so handler tests need
+# no listening socket and no port allocation.
+http-body-util = "0.1"
+proptest = "1.11"
+insta = { version = "1.48", features = ["json", "redactions"] }
+criterion = { version = "0.8", features = ["html_reports"] }
+wiremock = "0.6"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "test-util"] }
+
+[profile.release]
+# The render pipeline is the hot path and crosses several crate boundaries
+# (resize, blur, composite, encode). Cross-crate inlining is worth the compile
+# time on a service whose latency budget is measured in tens of milliseconds.
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.bench]
+debug = true  # criterion attributes samples to source lines

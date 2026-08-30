@@ -88,16 +88,22 @@ follow, and they are the reason the boundary exists:
 3. `rayon` can be used freely inside the render without any risk of blocking a
    tokio worker, because the whole call already sits inside `spawn_blocking`.
 
-The rule is enforced mechanically by the `disallowed-types` entries in
-`clippy.toml`, not by convention.
+The rule is enforced mechanically by `tests/module_boundary.rs`, which walks
+`src/render/` and fails on `reqwest`, `object_store`, `axum`, `async fn`,
+`.await` or `tokio::`.
+
+It deliberately does *not* use a clippy `disallowed-types` entry.
+`clippy.toml` applies to the whole crate, so banning `reqwest::Client` there
+would also fire in `state.rs`, where the client legitimately lives — the rule
+is about a directory, and only a directory-scoped check can express it.
 
 ---
 
 ## 3. Crate layout
 
 A single binary crate with a library target. Not a workspace: the module
-boundary above is the one that matters, and it is enforced by lint rather than
-by crate separation. Splitting `render/` into its own crate becomes worthwhile
+boundary above is the one that matters, and it is enforced by a directory-
+scoped test rather than by crate separation. Splitting `render/` into its own crate becomes worthwhile
 only if a second binary needs it (see § 14.5).
 
 | Path | Responsibility |
@@ -133,6 +139,7 @@ only if a second binary needs it (see § 14.5).
 | `assets/fonts/` | Embedded font faces with their licences. |
 | `assets/presets.toml` | Preset catalogue, embedded via `include_str!`. |
 | `tests/` | Integration tests: HTTP round trip against wiremock and in-memory storage. |
+| `tests/module_boundary.rs` | Fails the build if `src/render/` acquires an async or I/O dependency. |
 | `tests/visual/` | Reference PNGs and the perceptual comparison harness. |
 | `benches/` | criterion benchmarks: blur, resize, encode, end-to-end. |
 
@@ -588,6 +595,7 @@ Six layers, each responsible for something the others cannot cover.
 | `tmdb/mod.rs` | Path regex accepts real TMDB paths; rejects `..`, absolute URLs, protocol-relative URLs, null bytes, unicode lookalikes |
 | `tmdb/fetch.rs` | Byte cap fires on a body larger than the cap even when `Content-Length` lies or is absent; dimension guard fires before allocation |
 | `render/blur.rs` | Box sizes match the SVG 1.1 formula for a table of sigmas |
+| `tests/module_boundary.rs` | `src/render/` contains no async, HTTP or storage dependency |
 | `render/badges.rs` | Text is XML-escaped; grapheme limit is enforced on clusters, not bytes |
 
 ### 11.2 Property tests (proptest)
@@ -857,6 +865,9 @@ from the test suite. § 11.2 is written this way.
   is inside p99 but leaves little room. w2000 may warrant its own target, or
   admission on a separate semaphore so a burst of w2000 requests cannot
   starve the w1000 path.
-- **Crate split.** `render/` stays a module in v1. If a CLI or a batch
-  pre-warmer is ever built, extracting it to its own crate would make the
-  boundary structural instead of lint-enforced.
+- **Crate split.** `render/` stays a module in v1, with its boundary held by
+  a text-matching test. That test is coarse — it reads source rather than the
+  AST — and it is honest about being a tripwire rather than a proof. Extracting
+  `render/` into its own crate in a workspace would make the boundary
+  structural: the dependency simply would not be in scope. Worth doing the
+  first time a second binary needs the renderer.
