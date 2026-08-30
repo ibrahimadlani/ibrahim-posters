@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a pull request makes the previous run's answer irrelevant, so
+# cancel it rather than paying for a result nobody will read.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Debug symbols are the bulk of the target directory and CI never opens a
+  # debugger; dropping them makes the cache meaningfully smaller.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # Jobs are split so a failure names itself in the checks list. A single
+  # "build" job that runs everything reports "build failed", which costs a log
+  # dive to learn what a job name could have said outright.
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Beta is advisory: it warns about breakage a release ahead without
+      # blocking a merge on a toolchain nothing ships against.
+      matrix:
+        toolchain: [stable, beta]
+    continue-on-error: ${{ matrix.toolchain == 'beta' }}
+    env:
+      # Without this the pin in rust-toolchain.toml wins and both matrix legs
+      # run 1.98.0, so the beta leg reports a pass it never earned.
+      # RUSTUP_TOOLCHAIN takes precedence over the file.
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --all-features
+      # nextest does not run doc tests, and every public item is documented
+      # with an example that is required to compile.
+      - run: cargo test --doc --all-features
+
+  deny:
+    name: deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  typos:
+    name: typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: crate-ci/typos@master
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+      # Coverage is gated on src/render/ and src/spec/ only, from M1 onward.
+      # A crate-wide percentage would be satisfied by testing main.rs wiring
+      # and would say nothing about the two modules where a bug is either a
+      # visual defect or a cache-poisoning event.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: lcov.info
+
+  build-release:
+    name: build-release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # rust-toolchain.toml pins 1.98.0, and rustup honours it over whatever
+      # the action just selected. Adding the target to `stable` therefore adds
+      # it to the wrong toolchain, and the build fails on a missing `core`.
+      # Add it to the toolchain that will actually be active.
+      - run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      # The webp crate builds libwebp from source. musl needs a cross linker,
+      # and this is the job that proves the static image is buildable before a
+      # release depends on it. See PLAN.md section 14.2.
+      - name: Install musl toolchain
+        if: endsWith(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --target ${{ matrix.target }}

@@ -1,0 +1,33 @@
+# Mirrors the CI gates so a failure surfaces locally, before a push burns a
+# CI run and a review cycle. Kept fast: the slow jobs (coverage, release
+# builds, cargo-deny's network fetch) stay in CI only.
+#
+# Install with: lefthook install
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.rs"
+      run: cargo fmt --all --check
+      fail_text: "run `cargo fmt --all`"
+    clippy:
+      glob: "*.rs"
+      run: cargo clippy --all-targets --all-features -- -D warnings
+    typos:
+      run: typos
+      # Not everyone will have typos installed; CI is the authoritative check.
+      skip: true
+
+pre-push:
+  commands:
+    test:
+      run: cargo nextest run --all-features || cargo test --all-features
+
+commit-msg:
+  commands:
+    commitlint:
+      run: npx --no-install commitlint --edit {1}
+      # Only enforced locally when the dev dependencies happen to be present.
+      # The authoritative check is the commitlint workflow.
+      skip: true

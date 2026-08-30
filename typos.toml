@@ -1,7 +1,4 @@
 [files]
-extend-exclude = ["CHANGELOG.md", "*.snap", "tests/visual/reference/*"]
-
-[default.extend-words]
-# Imaging and colour-space vocabulary that the dictionary flags.
-BA = "BA"
-srgb = "srgb"
+# Cargo.lock holds checksums; the changelog is generated from commit subjects
+# and is corrected at the source rather than after generation.
+extend-exclude = ["CHANGELOG.md", "Cargo.lock", "*.snap", "tests/visual/reference/*"]
