@@ -1,0 +1,16 @@
+# Keep cognitive load low in the render pipeline, where long straight-line
+# pixel code is easy to write and hard to read.
+cognitive-complexity-threshold = 20
+
+# The render module must stay free of async and I/O so it can be unit tested
+# and pixel-compared without a runtime or a network. These types are the ones
+# that would silently drag either dependency in; the boundary is documented in
+# docs/adr/0001-pure-rust-imaging-over-libvips-ffi.md.
+disallowed-types = [
+    { path = "reqwest::Client", reason = "render/ must not perform I/O; pass byte buffers in" },
+    { path = "tokio::runtime::Runtime", reason = "render/ must stay synchronous" },
+]
+
+# Poster geometry is expressed in f32 throughout; allow the small literals that
+# appear in gradient ramps and blur kernels without a suffix.
+allow-mixed-uninlined-format-args = false

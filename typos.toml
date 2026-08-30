@@ -1,0 +1,7 @@
+[files]
+extend-exclude = ["CHANGELOG.md", "*.snap", "tests/visual/reference/*"]
+
+[default.extend-words]
+# Imaging and colour-space vocabulary that the dictionary flags.
+BA = "BA"
+srgb = "srgb"

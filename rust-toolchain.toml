@@ -1,0 +1,8 @@
+# Pinned so that every developer, CI runner and release image compiles with
+# byte-identical rustc behaviour. Visual regression fixtures are sensitive to
+# codegen changes in the imaging hot paths, so an unpinned toolchain would let
+# CI drift produce diffs that look like rendering bugs.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+profile = "default"
