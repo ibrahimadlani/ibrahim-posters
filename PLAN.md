@@ -359,17 +359,34 @@ hit, measured on one core of a modern x86-64 server part. It is a *render*
 budget: it starts when the source bytes are in memory and ends when the WebP
 buffer is complete. What it excludes is discussed in § 14.1.
 
-| # | Stage | Budget | Why this way |
-|---|---|---|---|
-| 1 | Decode source | 8 ms | `zune-jpeg` is measurably faster than the `image` JPEG path and does not pull the whole `image` codec surface. Dimensions are read from the header first and checked against the guard *before* any pixel buffer is allocated. |
-| 2 | Resize to target | 6 ms | `fast_image_resize` with Lanczos3, SIMD-dispatched at runtime. Resize happens before every other stage so that all subsequent work is at output resolution and no stage pays for pixels that will be discarded. |
-| 3 | Blur band | 3 ms | Downscale ÷8, three box passes, upscale. Argument below. |
-| 4 | Composite blur band | 2 ms | The blurred band is composited back through a feathered alpha ramp so the band's top edge dissolves instead of showing a seam. |
-| 5 | Darkening ramp | 2 ms | A single linear alpha ramp applied in place. Runs after the blur so it darkens the blurred result rather than being smeared by it. |
-| 6 | Logo composite | 3 ms | `tiny-skia` with premultiplied alpha. |
-| 7 | Badge row | 12 ms | `fontdb` measures each string, geometry is computed, one SVG is built for the whole row and rasterised once by `resvg`. One rasterisation for the row rather than one per badge: `usvg` parsing dominates, and it is per-document, not per-node. |
-| 8 | Encode WebP | 22 ms | libwebp, quality 82, method 4. Method 4 is the knee of the quality-per-millisecond curve; method 6 costs roughly 2.5× the time for a difference that does not survive a blind comparison at this size. |
-| | **Total** | **≈ 58 ms** | 22 ms of headroom against the 80 ms p50 target. |
+| # | Stage | Budgeted | **Measured** | Why this way |
+|---|---|---|---|---|
+| 1 | Decode source | 8 ms | *(see note)* | `zune-jpeg` is faster than the `image` JPEG path and does not pull the whole `image` codec surface. Dimensions are read from the header and checked against the guard *before* any pixel buffer is allocated. |
+| 2 | Resize to target | 6 ms | **12.4 ms** | `fast_image_resize` with Lanczos3, SIMD-dispatched at runtime. Resize happens before every other stage so all subsequent work is at output resolution. |
+| 3 | Blur band | 3 ms | **2.35 ms** | Downscale ÷8, three box passes, upscale. Argument and measurement below. |
+| 4 | Composite blur band | 2 ms | *(in 1+4+5+6)* | The blurred band is composited back through a feathered alpha ramp so the top edge dissolves instead of showing a seam. |
+| 5 | Darkening ramp | 2 ms | *(in 1+4+5+6)* | A single alpha ramp applied in place. Runs after the blur so it darkens the blurred result rather than being smeared by it. |
+| 6 | Logo composite | 3 ms | *(in 1+4+5+6)* | `tiny-skia` with premultiplied alpha. |
+| 7 | Badge row | 12 ms | **0.7 ms** | One SVG for the whole row, rasterised once. `usvg` parsing dominates and is per *document*, not per node. |
+| 8 | Encode WebP | 22 ms | **29.7 ms** | libwebp, quality 82, **method 2** — see § 5.3. |
+| | **Render subtotal** (stages 1–7) | 36 ms | **33.0 ms** | |
+| | **Total with encode** | **58 ms** | **≈ 62.7 ms** | Against an 80 ms p50 target. |
+
+Measured with `cargo bench --bench render` on aarch64 (Apple silicon), single core,
+synthetic poster-shaped fixtures. Stages 1, 4, 5 and 6 are not benchmarked
+individually; their combined cost is the 33.0 ms render subtotal less the
+measured resize and blur, roughly 18 ms.
+
+Three of the estimates were wrong, and the directions are instructive:
+
+- **Resize cost double the estimate** (12.4 ms against 6 ms). It is now the
+  second most expensive stage and the strongest argument for the L1 tier,
+  which removes it entirely on a repeat source.
+- **Badges seventeen times cheaper** (0.7 ms against 12 ms). Building one SVG
+  document for the whole row rather than one per badge was the right call and
+  a larger win than expected.
+- **Encode over budget even after being fixed** (29.7 ms against 22 ms), and
+  it was 56 ms before § 5.4.
 
 The two stages worth arguing for explicitly:
 
@@ -391,6 +408,21 @@ sigmas the presets use, the difference from a full-resolution gaussian is
 below the perceptual threshold and, more usefully, below the tolerance the
 visual regression harness enforces.
 
+The factor is measured rather than assumed. `blur_band_w1000` is parameterised
+over it, with `k = 1` as the full-resolution baseline:
+
+| factor | time | speed-up |
+|--------|------|----------|
+| 1 (baseline) | 11.8 ms | — |
+| 2 | 6.3 ms | 1.9× |
+| 4 | 3.0 ms | 3.9× |
+| **8** | **2.35 ms** | **5.0×** |
+| 16 | 2.10 ms | 5.6× |
+
+Returns flatten after 8: going to 16 buys a further 11 % while halving the
+resolution the blur is computed at again. Eight is where the curve turns,
+which is why it is the constant.
+
 ### 5.2 Why three box passes approximate a gaussian
 
 Convolving box kernels repeatedly converges to a gaussian: it is the central
@@ -411,7 +443,37 @@ sigma, which makes design iteration in a browser meaningful; and the constant
 is chosen so that the box sequence has the same variance as the target
 gaussian, which is the property that makes three passes sufficient.
 
-### 5.3 Parallelism
+### 5.3 The encoder method was wrong
+
+This plan originally specified libwebp method 4, on the reasoning that it is
+"the knee of the quality-per-millisecond curve" and that method 6 costs 2.5×
+the time for an invisible difference. The second half is right. The first is
+not:
+
+| method | time | bytes |
+|--------|------|-------|
+| 0 | 35.6 ms | 217 936 |
+| 1 | 38.4 ms | 215 728 |
+| **2** | **59.1 ms** | **210 266** |
+| 3 | 133.4 ms | 220 242 |
+| 4 | 133.7 ms | 221 622 |
+| 6 | 333.0 ms | 217 440 |
+
+*(Measured on a photo-like 1000×1500 fixture at quality 82. The absolute
+numbers are higher than the benchmark's 29.7 ms because that fixture is
+smoother; the ordering is what matters.)*
+
+Method 4 is **dominated** by method 2 — slower and larger at the same time.
+There is no trade-off to weigh, only an assumption that measurement
+contradicted. The service uses method 2.
+
+Two things follow. Encoding at method 4 would have cost 56 ms and put the
+total at roughly 89 ms, over the p50 target, so the budget in § 5 was
+achievable only because this was measured. And methods 0 and 1 are faster
+still but give the size advantage back, which is a poor trade on a path where
+bandwidth is paid on every edge miss.
+
+### 5.4 Parallelism
 
 Stages 3–6 are row-parallel over disjoint slices and use `rayon`. Stages 1, 2
 and 8 are already internally parallel or SIMD-dispatched inside their crates.

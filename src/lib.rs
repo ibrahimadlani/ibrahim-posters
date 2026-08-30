@@ -15,9 +15,9 @@
 //! - [`tmdb`] owns source addressing. A [`tmdb::PosterPath`] is proof that a
 //!   path is safe to append to the configured CDN base, which is the whole
 //!   SSRF control.
-//! - `render` (from milestone M4) is pure, synchronous, and depends only on a
-//!   resolved specification and byte buffers. It performs no I/O and knows
-//!   nothing about HTTP.
+//! - [`render`] is pure, synchronous, and depends only on a resolved
+//!   specification and byte buffers. It performs no I/O and knows nothing
+//!   about HTTP.
 //!
 //! The `render` restriction is enforced by the `disallowed-types` entries in
 //! `clippy.toml` rather than by convention, because three properties depend on
@@ -33,6 +33,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod api;
+pub mod render;
 pub mod spec;
 pub mod storage;
 pub mod tmdb;
