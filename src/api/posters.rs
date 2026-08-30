@@ -261,55 +261,17 @@ async fn gather_assets(state: &AppState, spec: &ResolvedSpec) -> Result<render::
     Ok(render::Assets { background, logo })
 }
 
-/// Returns background artwork resized to fill the output frame, via L1.
+/// Fetches background artwork from TMDB and resizes it to fill the frame.
 ///
-/// L1 stores the artwork already resized, so a repeat request for the same
-/// source at the same width skips both the upstream fetch and the resize —
-/// which measurement puts at 12.4 ms, the second most expensive stage.
+/// Fetched on every render rather than cached. The service stores what it
+/// *produces*, not what it *consumes*: TMDB artwork is someone else's, and
+/// keeping a copy of it turns a compositing service into a redistributor of
+/// images it has no right to redistribute.
 ///
-/// **Backgrounds only.** A logo must not come through here: resizing to fill
-/// the poster frame crops away its aspect ratio, and the renderer's placement
-/// logic then fits whatever survived. See [`load_logo`].
+/// The cost is real and bounded. A fetch and a resize together are roughly
+/// 25 ms, and they are paid only when the rendered poster is not already in
+/// L2 — which above the target hit rate is a small fraction of requests.
 async fn load_background(
-    state: &AppState,
-    path: &PosterPath,
-    width: OutputWidth,
-) -> Result<Vec<u8>, ApiError> {
-    if let Some(cached) = state.storage.get_l1_source(path, width).await? {
-        observability::record_cache_lookup(Tier::L1Source, true);
-        return Ok(cached.to_vec());
-    }
-    observability::record_cache_lookup(Tier::L1Source, false);
-
-    // Coalesced separately from the poster. Several *different* posters built
-    // from one piece of artwork share no poster key, so without this they each
-    // fetch and resize that artwork independently.
-    let _guard = match state.admission.join(keys::l1_source(path, width)) {
-        Role::Leader(guard) => guard,
-        Role::Follower(notify) => {
-            metrics::counter!(observability::SINGLEFLIGHT_COLLAPSED).increment(1);
-            admission::wait_for_leader(&notify).await;
-            if let Some(cached) = state.storage.get_l1_source(path, width).await? {
-                observability::record_cache_lookup(Tier::L1Source, true);
-                return Ok(cached.to_vec());
-            }
-            // The leader failed or timed out. Proceeding without a guard is
-            // the degradation single-flight is allowed to make: redundant
-            // work rather than a failed request.
-            match state.admission.join(keys::l1_source(path, width)) {
-                Role::Leader(guard) => guard,
-                Role::Follower(_) => {
-                    return fetch_and_resize(state, path, width).await;
-                }
-            }
-        }
-    };
-
-    fetch_and_resize(state, path, width).await
-}
-
-/// Fetches artwork from upstream, resizes it to the frame, and caches it.
-async fn fetch_and_resize(
     state: &AppState,
     path: &PosterPath,
     width: OutputWidth,
@@ -317,81 +279,40 @@ async fn fetch_and_resize(
     let url = path.cdn_url(&state.config.tmdb_image_base, upstream_size(width));
     let started = std::time::Instant::now();
     let fetched = fetch::fetch_image(&state.http, &url, state.config.fetch_limits()).await?;
-    metrics::histogram!(observability::UPSTREAM_DURATION).record(started.elapsed().as_secs_f64());
+    metrics::histogram!(observability::UPSTREAM_DURATION, "asset" => "background")
+        .record(started.elapsed().as_secs_f64());
 
     let (target_width, target_height) = width.dimensions();
     let quality = state.config.intermediate_quality();
 
-    // Decode, resize and re-encode are CPU-bound; the same reasoning as the
-    // render itself applies.
-    let resized = tokio::task::spawn_blocking(move || {
+    // Decoding and resizing are CPU-bound; the same reasoning as the render
+    // itself applies. Re-encoded rather than passed through as raw pixels so
+    // the renderer takes one shape of input regardless of source format.
+    tokio::task::spawn_blocking(move || {
         let decoded = source::decode(&fetched.bytes)?;
         let fitted = source::resize_to_fill(&decoded, target_width, target_height)?;
         render::encode::webp(&fitted, quality)
     })
     .await
-    .map_err(|error| ApiError::RenderFailed(format!("resize task failed: {error}")))??;
-
-    if let Err(error) = state
-        .storage
-        .put_l1_source(path, width, resized.clone())
-        .await
-    {
-        tracing::warn!(%error, "resized source could not be cached");
-    }
-
-    Ok(resized)
+    .map_err(|error| ApiError::RenderFailed(format!("resize task failed: {error}")))?
+    .map_err(Into::into)
 }
 
-/// Returns a title logo at its natural size, via the L1 logo tier.
+/// Fetches a title logo from TMDB at its natural size.
 ///
-/// Deliberately does *not* resize. The renderer derives a placement from the
-/// logo's intrinsic aspect ratio and fits it there, so pre-scaling to the
-/// poster frame would destroy the input that placement depends on — the logo
-/// would arrive already cropped to 2:3 and be fitted a second time.
-///
-/// The bytes are cached exactly as fetched rather than re-encoded. Logos carry
-/// alpha and hard edges, which a lossy pass degrades visibly where a
-/// photographic background tolerates it.
+/// Not resized here. The renderer derives a placement from the logo's
+/// intrinsic aspect ratio and fits it there, so pre-scaling to the poster
+/// frame would destroy the input that placement depends on — the logo would
+/// arrive already cropped to 2:3 and be fitted a second time.
 async fn load_logo(state: &AppState, path: &PosterPath) -> Result<Vec<u8>, ApiError> {
-    if let Some(cached) = state.storage.get_l1_logo(path).await? {
-        observability::record_cache_lookup(Tier::L1Logo, true);
-        return Ok(cached.to_vec());
-    }
-    observability::record_cache_lookup(Tier::L1Logo, false);
-
-    let _guard = match state.admission.join(keys::l1_logo(path)) {
-        Role::Leader(guard) => guard,
-        Role::Follower(notify) => {
-            metrics::counter!(observability::SINGLEFLIGHT_COLLAPSED).increment(1);
-            admission::wait_for_leader(&notify).await;
-            if let Some(cached) = state.storage.get_l1_logo(path).await? {
-                observability::record_cache_lookup(Tier::L1Logo, true);
-                return Ok(cached.to_vec());
-            }
-            match state.admission.join(keys::l1_logo(path)) {
-                Role::Leader(guard) => guard,
-                Role::Follower(_) => return fetch_logo(state, path).await,
-            }
-        }
-    };
-
-    fetch_logo(state, path).await
-}
-
-/// Fetches a logo from upstream and caches it unmodified.
-async fn fetch_logo(state: &AppState, path: &PosterPath) -> Result<Vec<u8>, ApiError> {
     // Requested at the larger size regardless of output width: a logo is
     // scaled down to its placement, and starting from more pixels costs one
     // resample rather than an upscale.
     let url = path.cdn_url(&state.config.tmdb_image_base, TmdbSize::W1280);
     let started = std::time::Instant::now();
     let fetched = fetch::fetch_image(&state.http, &url, state.config.fetch_limits()).await?;
-    metrics::histogram!(observability::UPSTREAM_DURATION).record(started.elapsed().as_secs_f64());
-
-    if let Err(error) = state.storage.put_l1_logo(path, fetched.bytes.clone()).await {
-        tracing::warn!(%error, "logo could not be cached");
-    }
+    metrics::histogram!(observability::UPSTREAM_DURATION, "asset" => "logo")
+        .record(started.elapsed().as_secs_f64());
 
     Ok(fetched.bytes)
 }
