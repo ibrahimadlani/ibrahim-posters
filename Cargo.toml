@@ -140,6 +140,16 @@ tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "test-util"
 name = "render"
 harness = false
 
+# Dependencies are optimised even in debug builds. The imaging crates are
+# roughly 200x slower unoptimised -- a w2000 render takes 67 ms in release and
+# over 13 s in debug -- which pushed the integration tests past the service's
+# own 15 s request timeout and made them fail with 504 in CI. Our own code
+# stays unoptimised so stack traces and debugging remain useful; only the
+# dependencies are built with optimisation, which costs one slower first build
+# and nothing after that.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 # The render pipeline is the hot path and crosses several crate boundaries
 # (resize, blur, composite, encode). Cross-crate inlining is worth the compile
