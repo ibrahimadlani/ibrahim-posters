@@ -71,6 +71,12 @@ blake3 = "1.8"
 # Chosen over aws-sdk-s3 for its LocalFileSystem and InMemory backends:
 # integration tests run with no containers and no credentials.
 object_store = { version = "0.14.1", features = ["aws"] }
+# object_store hands back Bytes; naming the type directly avoids re-exporting
+# it through this crate's public API and pinning a version implicitly.
+bytes = "1.11"
+# StreamExt for the readiness listing. object_store returns a Stream, and
+# nothing else in the crate needs a stream combinator.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # --- Concurrency ------------------------------------------------------------
 # Singleflight map. Sharded locking, so concurrent misses on different keys do

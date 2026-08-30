@@ -8,7 +8,14 @@ pub mod health;
 
 use axum::Router;
 
+use crate::storage::Storage;
+
 /// Builds the application router with its middleware stack.
+///
+/// # Arguments
+///
+/// * `storage` — the object store backing both cache tiers and specification
+///   persistence.
 ///
 /// # Returns
 ///
@@ -18,10 +25,12 @@ use axum::Router;
 /// # Examples
 ///
 /// ```
-/// let app = poster_service::api::router();
+/// use poster_service::{api, storage::Storage};
+///
+/// let app = api::router(Storage::in_memory());
 /// // `app` is ready to hand to `axum::serve`.
 /// let _ = app;
 /// ```
-pub fn router() -> Router {
-    Router::new().merge(health::routes())
+pub fn router(storage: Storage) -> Router {
+    Router::new().merge(health::routes(storage))
 }

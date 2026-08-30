@@ -34,6 +34,7 @@
 
 pub mod api;
 pub mod spec;
+pub mod storage;
 pub mod tmdb;
 
 /// Version of the rendering pipeline, mixed into every cache key.

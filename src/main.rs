@@ -35,7 +35,11 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to read local address")?;
     tracing::info!(address = %bound, "listening");
 
-    axum::serve(listener, poster_service::api::router())
+    // In-memory until the configuration layer lands in M5; nothing yet
+    // reads or writes anything that must outlive the process.
+    let storage = poster_service::storage::Storage::in_memory();
+
+    axum::serve(listener, poster_service::api::router(storage))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server error")

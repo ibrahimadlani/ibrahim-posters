@@ -1,6 +1,8 @@
 //! The canonical, fully resolved render specification.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use crate::spec::clamp;
 
 use crate::spec::key::CacheKey;
 use crate::spec::request::{Badge, OutputWidth};
@@ -25,7 +27,18 @@ use crate::tmdb::{PosterPath, SourceKind};
 /// - Two requests that differ only in ways the renderer ignores resolve to
 ///   equal values. This is what makes the target cache hit rate reachable, and
 ///   it is asserted by property test rather than assumed.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+///
+/// # Deserialisation
+///
+/// `Deserialize` is derived so that persisted specifications can be read back,
+/// but deriving it means a value can be constructed without passing through
+/// [`crate::spec::preset::resolve`], which is where the clamping happens.
+/// [`ResolvedSpec::validate`] closes that gap and every read from storage
+/// calls it. The case is not hypothetical: a specification written by a build
+/// with wider clamp ranges would deserialise cleanly and hand the renderer
+/// geometry the current build considers out of bounds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResolvedSpec {
     /// Background artwork.
     pub source: PosterPath,
@@ -85,6 +98,73 @@ impl ResolvedSpec {
     pub const fn dimensions(&self) -> (u32, u32) {
         self.width.dimensions()
     }
+
+    /// Checks every field against its clamp range.
+    ///
+    /// Called on every specification read back from storage. A value produced
+    /// by [`crate::spec::preset::resolve`] always passes; one that does not
+    /// was deserialised from bytes this build did not write, and rendering it
+    /// would produce geometry outside the range the renderer was tested for.
+    ///
+    /// Pixel-valued fields are compared against ranges scaled to the output
+    /// width, matching how `resolve` produced them.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecViolation`] naming the first field found out of range.
+    pub fn validate(&self) -> Result<(), SpecViolation> {
+        let scale = self.width.scale();
+        let pixel_scale = self.width.pixel_scale();
+
+        let checks: [(&'static str, bool); 6] = [
+            (
+                "blur_band_fraction",
+                clamp::BLUR_BAND_FRACTION.contains(&self.blur_band_fraction),
+            ),
+            (
+                "blur_sigma",
+                self.blur_sigma >= *clamp::BLUR_SIGMA.start() * scale
+                    && self.blur_sigma <= *clamp::BLUR_SIGMA.end() * scale,
+            ),
+            (
+                "darken_strength",
+                clamp::DARKEN_STRENGTH.contains(&self.darken_strength),
+            ),
+            (
+                "logo_width_fraction",
+                clamp::LOGO_WIDTH_FRACTION.contains(&self.logo_width_fraction),
+            ),
+            (
+                "logo_bottom_fraction",
+                clamp::LOGO_BOTTOM_FRACTION.contains(&self.logo_bottom_fraction),
+            ),
+            (
+                "badge_height",
+                self.badge_height >= *clamp::BADGE_HEIGHT.start() * pixel_scale
+                    && self.badge_height <= *clamp::BADGE_HEIGHT.end() * pixel_scale,
+            ),
+        ];
+
+        for (field, ok) in checks {
+            if !ok {
+                return Err(SpecViolation { field });
+            }
+        }
+
+        if self.badges.len() > clamp::MAX_BADGES {
+            return Err(SpecViolation { field: "badges" });
+        }
+
+        Ok(())
+    }
+}
+
+/// A stored specification carried a field outside its permitted range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("field `{field}` is outside its permitted range")]
+pub struct SpecViolation {
+    /// Name of the offending field.
+    pub field: &'static str,
 }
 
 #[cfg(test)]
