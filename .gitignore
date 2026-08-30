@@ -1,5 +1,19 @@
 /target
 **/*.rs.bk
-Cargo.lock.orig
+*.pdb
+
+# Coverage and profiling output
+/lcov.info
+/coverage
+*.profraw
+
+# insta writes these while a snapshot is pending review
+*.snap.new
+
+# Visual regression failures are written next to the reference images
+/tests/visual/output
+
 .DS_Store
 .env
+.env.*
+!.env.example
