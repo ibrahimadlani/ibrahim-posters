@@ -14,6 +14,9 @@
 //! because filters lose to DNS rebinding, IPv6-mapped addresses, redirect
 //! chains and decimal IP encodings, and a constant host loses to none of them.
 
+pub mod fetch;
+pub mod probe;
+
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
