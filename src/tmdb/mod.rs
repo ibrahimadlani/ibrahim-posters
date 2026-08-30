@@ -237,3 +237,161 @@ impl TmdbSize {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A path in the shape TMDB actually issues.
+    const REAL: &str = "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg";
+
+    #[test]
+    fn accepts_the_shapes_tmdb_issues() {
+        for path in [
+            REAL,
+            "/aaaaaaaaaaaaaaaaaaaa.png",
+            "/aaaaaaaaaaaaaaaaaaaa.webp",
+            "/0123456789012345678901234567890123456789012345678901234567.jpg",
+        ] {
+            assert!(PosterPath::parse(path).is_ok(), "should accept {path}");
+        }
+    }
+
+    /// The cases this type exists to make unrepresentable.
+    ///
+    /// Each entry is a way of naming a host other than the configured CDN, or
+    /// of escaping the path prefix. None of them can produce a `PosterPath`,
+    /// so none of them can reach [`PosterPath::cdn_url`].
+    #[test]
+    fn rejects_every_way_of_naming_another_host() {
+        for path in [
+            // Absolute URLs.
+            "https://evil.test/aaaaaaaaaaaaaaaaaaaa.jpg",
+            "http://evil.test/aaaaaaaaaaaaaaaaaaaa.jpg",
+            // Protocol-relative: begins with a slash and would resolve to a
+            // different host if it were ever concatenated into a URL.
+            "//evil.test/aaaaaaaaaaaaaaaaaaaa.jpg",
+            // Traversal out of the size prefix.
+            "/../../etc/passwd",
+            "/aaaaaaaaaaaaaaaaaaaa/../../../x.jpg",
+            // Scheme-relative and userinfo tricks.
+            "/@evil.test/aaaaaaaaaaaaaaaaaaaa.jpg",
+            "/aaaaaaaaaaaaaaaaaaaa.jpg@evil.test",
+            // Encoded separators.
+            "/%2e%2e%2faaaaaaaaaaaaaaaaaaaa.jpg",
+            "/aaaaaaaaaaaaaaaaaaaa%00.jpg",
+            // Query and fragment injection.
+            "/aaaaaaaaaaaaaaaaaaaa.jpg?x=1",
+            "/aaaaaaaaaaaaaaaaaaaa.jpg#x",
+            // Whitespace and control characters.
+            "/aaaaaaaaaaaaaaaaaaaa .jpg",
+            "/aaaaaaaaaaaaaaaaaaaa\n.jpg",
+            "/aaaaaaaaaaaaaaaaaaaa\0.jpg",
+        ] {
+            assert!(
+                PosterPath::parse(path).is_err(),
+                "must reject {path:?} -- this is the SSRF control"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_non_ascii_lookalikes() {
+        // Cyrillic "а" (U+0430) renders identically to Latin "a" in most
+        // fonts. char::is_alphanumeric would accept it; the byte-wise ASCII
+        // check does not, so a path cannot be spoofed in a log line.
+        let cyrillic = format!("/{}.jpg", "\u{430}".repeat(20));
+        assert_eq!(
+            PosterPath::parse(&cyrillic),
+            Err(InvalidPosterPath::NonAlphanumericStem)
+        );
+    }
+
+    #[test]
+    fn reports_which_rule_failed() {
+        assert_eq!(
+            PosterPath::parse("kqjL17yufvn9OVLyXYpvtyrFfak.jpg"),
+            Err(InvalidPosterPath::MissingLeadingSlash)
+        );
+        assert_eq!(
+            PosterPath::parse("/aaaaaaaaaaaaaaaaaaaa.gif"),
+            Err(InvalidPosterPath::UnsupportedExtension)
+        );
+        assert_eq!(
+            PosterPath::parse("/aaaaaaaaaaaaaaaaaaaa"),
+            Err(InvalidPosterPath::UnsupportedExtension)
+        );
+        assert_eq!(
+            PosterPath::parse("/short.jpg"),
+            Err(InvalidPosterPath::StemLength {
+                min: STEM_MIN,
+                max: STEM_MAX,
+                found: 5
+            })
+        );
+    }
+
+    #[test]
+    fn stem_length_bounds_are_inclusive() {
+        let at_min = format!("/{}.jpg", "a".repeat(STEM_MIN));
+        let at_max = format!("/{}.jpg", "a".repeat(STEM_MAX));
+        let below = format!("/{}.jpg", "a".repeat(STEM_MIN - 1));
+        let above = format!("/{}.jpg", "a".repeat(STEM_MAX + 1));
+
+        assert!(PosterPath::parse(&at_min).is_ok());
+        assert!(PosterPath::parse(&at_max).is_ok());
+        assert!(PosterPath::parse(&below).is_err());
+        assert!(PosterPath::parse(&above).is_err());
+    }
+
+    #[test]
+    fn cdn_url_always_names_the_configured_host() {
+        let path = PosterPath::parse(REAL).expect("valid");
+        assert_eq!(
+            path.cdn_url("https://image.tmdb.org/t/p", TmdbSize::W780),
+            "https://image.tmdb.org/t/p/w780/kqjL17yufvn9OVLyXYpvtyrFfak.jpg"
+        );
+        // A trailing slash on the base must not double up.
+        assert_eq!(
+            path.cdn_url("https://image.tmdb.org/t/p/", TmdbSize::W1280),
+            "https://image.tmdb.org/t/p/w1280/kqjL17yufvn9OVLyXYpvtyrFfak.jpg"
+        );
+    }
+
+    #[test]
+    fn deserialisation_goes_through_validation() {
+        // A derived impl would accept this; the hand-written one must not.
+        let rejected: Result<PosterPath, _> = serde_json::from_str(r#""https://evil.test/x.jpg""#);
+        assert!(rejected.is_err(), "Deserialize must not bypass parse");
+
+        let accepted: PosterPath =
+            serde_json::from_str(&format!("\"{REAL}\"")).expect("valid path");
+        assert_eq!(accepted.as_str(), REAL);
+    }
+
+    #[test]
+    fn display_and_serialisation_round_trip() {
+        let path = PosterPath::parse(REAL).expect("valid");
+        assert_eq!(path.to_string(), REAL);
+        assert_eq!(
+            serde_json::to_string(&path).expect("serialises"),
+            format!("\"{REAL}\"")
+        );
+    }
+
+    #[test]
+    fn size_segments_are_stable() {
+        // These appear in L1 cache paths, so a change orphans that tier.
+        assert_eq!(TmdbSize::W780.as_str(), "w780");
+        assert_eq!(TmdbSize::W1280.as_str(), "w1280");
+        assert_eq!(TmdbSize::Original.as_str(), "original");
+    }
+
+    #[test]
+    fn key_tags_are_stable() {
+        // Derived discriminants would shift if a variant were inserted above
+        // another, orphaning every cache key with no visible cause.
+        assert_eq!(SourceKind::Poster.key_tag(), 0);
+        assert_eq!(SourceKind::Backdrop.key_tag(), 1);
+    }
+}
