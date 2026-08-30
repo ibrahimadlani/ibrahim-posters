@@ -86,3 +86,46 @@ impl ResolvedSpec {
         self.width.dimensions()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::spec::{preset, request::PosterRequest};
+
+    fn resolve(json: &str) -> super::ResolvedSpec {
+        let request: PosterRequest = serde_json::from_str(json).expect("valid");
+        preset::resolve(&request).expect("resolves")
+    }
+
+    #[test]
+    fn dimensions_follow_the_requested_width() {
+        let small = resolve(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
+        let large =
+            resolve(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "width": "w2000" }"#);
+
+        assert_eq!(small.dimensions(), (1000, 1500));
+        assert_eq!(large.dimensions(), (2000, 3000));
+    }
+
+    #[test]
+    fn the_blur_band_is_a_whole_number_of_pixels_at_both_widths() {
+        // The band height is a fraction of poster height, and the renderer
+        // will slice rows by it. A fraction that lands mid-pixel is fine --
+        // it truncates -- but a band of zero rows would make the blur stage a
+        // silent no-op, which is worth catching here rather than visually.
+        for json in [
+            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#,
+            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "width": "w2000" }"#,
+        ] {
+            let spec = resolve(json);
+            let (_, height) = spec.dimensions();
+            #[allow(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss
+            )]
+            let band = (height as f32 * spec.blur_band_fraction) as u32;
+            assert!(band > 0, "blur band rounded to zero rows");
+            assert!(band <= height);
+        }
+    }
+}
