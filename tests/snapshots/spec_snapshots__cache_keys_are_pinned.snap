@@ -1,0 +1,7 @@
+---
+source: tests/spec_snapshots.rs
+expression: rendered
+---
+minimal: 16bfed6170699cb081ce207e2499bf89e71cc8cdb09f09f085d4aa79cee064ef
+w2000: 38182fde3aa0dca05eb0071cefbbc8d2e2785cdd80b13cb274a49f5b343f65ff
+cinematic-with-badges: fd9f222f38e0ebc3191776d6e086876b0ee5b9eeb4ebfbd0c3b61ecff45562a0

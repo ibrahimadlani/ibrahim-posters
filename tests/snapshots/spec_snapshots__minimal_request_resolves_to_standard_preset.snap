@@ -1,0 +1,17 @@
+---
+source: tests/spec_snapshots.rs
+expression: spec
+---
+{
+  "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+  "source_kind": "poster",
+  "logo": null,
+  "badges": [],
+  "width": "w1000",
+  "blur_band_fraction": 0.3,
+  "blur_sigma": 24.0,
+  "darken_strength": 0.55,
+  "logo_width_fraction": 0.6,
+  "logo_bottom_fraction": 0.12,
+  "badge_height": 44
+}
