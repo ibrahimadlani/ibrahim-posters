@@ -7,17 +7,26 @@
 //! unavailable — which removes capacity at precisely the moment the system is
 //! already degraded.
 
+use axum::extract::State;
+use axum::http::StatusCode;
 use axum::{routing::get, Router};
 
+use crate::storage::Storage;
+
 /// Mounts the health routes.
+///
+/// # Arguments
+///
+/// * `storage` — consulted by the readiness probe.
 ///
 /// # Returns
 ///
 /// A [`Router`] exposing `GET /healthz` and `GET /readyz`.
-pub fn routes() -> Router {
+pub fn routes(storage: Storage) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .with_state(storage)
 }
 
 /// Liveness probe.
@@ -35,14 +44,24 @@ async fn healthz() -> &'static str {
 
 /// Readiness probe.
 ///
-/// Reports whether the process can serve traffic. From milestone M3 this
-/// verifies that object storage is reachable, since a service that cannot read
-/// its cache tiers can accept a request but cannot answer it. Until the
-/// storage layer exists there is nothing to check and it mirrors liveness.
+/// Reports whether the process can serve traffic, which here means whether
+/// object storage is reachable: the service can accept a request without it
+/// but cannot answer one, since both cache tiers and every stored
+/// specification live there.
 ///
 /// # Returns
 ///
-/// The static body `"ready"`.
-async fn readyz() -> &'static str {
-    "ready"
+/// `200 OK` with body `"ready"`, or `503 Service Unavailable` with a short
+/// reason when storage cannot be reached.
+async fn readyz(State(storage): State<Storage>) -> (StatusCode, &'static str) {
+    match storage.check_reachable().await {
+        Ok(()) => (StatusCode::OK, "ready"),
+        Err(error) => {
+            // Logged rather than returned: the probe's consumer is an
+            // orchestrator that acts on the status code, and the detail
+            // belongs where an operator will look for it.
+            tracing::warn!(%error, "readiness check failed: storage unreachable");
+            (StatusCode::SERVICE_UNAVAILABLE, "storage unreachable")
+        }
+    }
 }
