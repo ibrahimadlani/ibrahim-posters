@@ -20,8 +20,14 @@ use std::path::Path;
 /// sufficient: the failure this guards against is someone reaching for
 /// `reqwest` inside a render stage, not someone deliberately evading a grep.
 const FORBIDDEN: &[(&str, &str)] = &[
-    ("reqwest", "render/ must not perform I/O; pass byte buffers in"),
-    ("object_store", "render/ must not read storage; pass byte buffers in"),
+    (
+        "reqwest",
+        "render/ must not perform I/O; pass byte buffers in",
+    ),
+    (
+        "object_store",
+        "render/ must not read storage; pass byte buffers in",
+    ),
     ("axum", "render/ must not know about HTTP"),
     ("async fn", "render/ must stay synchronous"),
     (".await", "render/ must stay synchronous"),

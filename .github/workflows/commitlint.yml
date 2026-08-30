@@ -1,0 +1,30 @@
+name: Commit lint
+
+on:
+  pull_request:
+
+jobs:
+  commitlint:
+    name: commitlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # commitlint needs the branch's commits, not just the merge result.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-save @commitlint/cli @commitlint/config-conventional
+      - name: Lint commits in this pull request
+        run: >-
+          npx commitlint
+          --from ${{ github.event.pull_request.base.sha }}
+          --to ${{ github.event.pull_request.head.sha }}
+          --verbose
+      # Merges are squashed with the pull request title as the subject, so the
+      # title is what actually lands on main and has to pass the same rules.
+      - name: Lint the pull request title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: echo "$PR_TITLE" | npx commitlint --verbose
