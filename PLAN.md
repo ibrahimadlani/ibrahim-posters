@@ -560,6 +560,7 @@ part of the public contract.
 |---|---|---|---|
 | `InvalidPosterPath` | 400 | `invalid_poster_path` | No |
 | `UnknownPreset` | 400 | `unknown_preset` | No |
+| `MalformedRequest` | 400 | `malformed_request` | No |
 | `ValidationFailed` | 422 | `validation_failed` | No |
 | `SourceDimensionsExceeded` | 422 | `source_dimensions_exceeded` | No |
 | `UnknownKey` | 404 | `unknown_key` | No |
@@ -572,12 +573,19 @@ part of the public contract.
 | `StorageUnavailable` | 503 | `storage_unavailable` | Yes, `Retry-After: 2` |
 | `RenderFailed` | 500 | `render_failed` | No |
 
-Two choices worth stating. `SourceNotFound` is 404 rather than 502 because the
-client named artwork that does not exist — that is a client error about a
+Three choices worth stating. `SourceNotFound` is 404 rather than 502 because
+the client named artwork that does not exist — that is a client error about a
 resource, and returning 502 would invite a retry that cannot succeed.
 `SourceTooLarge` is 502 rather than 413 because the oversized payload is the
 upstream's, not the client's; 413 would tell the caller to shrink a request
 body they did not send.
+
+`MalformedRequest` was added during M5 and is not merely a rename of a
+validation failure. `PosterPath` validates inside its `Deserialize`, so a bad
+path arrives as a serde error indistinguishable from a misspelled field —
+which made `invalid_poster_path` unreachable in practice even though it is
+listed here as a contract clients branch on. The handler now re-examines a
+failed body to tell the two apart, and both codes are reachable and tested.
 
 `Cache-Control` on errors is `no-store`, with one exception: `UnknownKey` is
 cacheable for 60 s, because an unknown key is unknown permanently and the CDN
@@ -587,26 +595,41 @@ should absorb the retry storm that follows a bad link being shared.
 
 ## 9. Configuration
 
+All service settings are read from **`POSTER_`-prefixed** environment
+variables.
+
 | Name | Required | Secret | Purpose |
 |---|---|---|---|
-| `BIND_ADDR` | No (`0.0.0.0:8080`) | No | Listen address |
-| `LOG_FORMAT` | No (`json`) | No | `json` in production, `pretty` locally |
-| `LOG_LEVEL` | No (`info`) | No | Tracing filter |
-| `STORAGE_BACKEND` | Yes | No | `s3`, `local` or `memory` |
-| `STORAGE_BUCKET` | If `s3` | No | Bucket name |
-| `STORAGE_LOCAL_PATH` | If `local` | No | Root directory |
-| `S3_ENDPOINT` | No | No | Set for MinIO, R2 or any S3-compatible host |
-| `AWS_REGION` | If `s3` | No | Region |
-| `AWS_ACCESS_KEY_ID` | If `s3` | **Yes** | Credential |
-| `AWS_SECRET_ACCESS_KEY` | If `s3` | **Yes** | Credential |
-| `TMDB_IMAGE_BASE` | No (`https://image.tmdb.org/t/p`) | No | CDN base; the only host ever contacted |
-| `TMDB_API_KEY` | **No** | **Yes** | See note below |
-| `MAX_UPSTREAM_BYTES` | No (`20971520`) | No | Streaming byte cap |
-| `MAX_SOURCE_DIMENSION` | No (`8000`) | No | Pre-decode dimension guard |
-| `RENDER_CONCURRENCY` | No (`num_cpus`) | No | Semaphore permits |
-| `RENDER_ACQUIRE_TIMEOUT_MS` | No (`50`) | No | Bounded admission wait |
-| `UPSTREAM_TIMEOUT_MS` | No (`3000`) | No | Total upstream timeout |
-| `L1_TTL_DAYS` | No (`30`) | No | Resized-background tier lifetime |
+| `POSTER_BIND_ADDR` | No (`0.0.0.0:8080`) | No | Listen address |
+| `POSTER_LOG_FORMAT` | No (`json`) | No | `json` in production, `pretty` locally |
+| `POSTER_LOG_LEVEL` | No (`info`) | No | Tracing filter |
+| `POSTER_STORAGE_BACKEND` | No (`memory`) | No | `s3`, `local` or `memory` |
+| `POSTER_STORAGE_BUCKET` | If `s3` | No | Bucket name |
+| `POSTER_STORAGE_LOCAL_PATH` | If `local` | No | Root directory, created if absent |
+| `POSTER_S3_ENDPOINT` | No | No | Set for MinIO, R2 or any S3-compatible host |
+| `POSTER_S3_REGION` | No | No | Region override |
+| `POSTER_PUBLIC_BASE_URL` | No | No | Origin used to build the URL returned by `POST` |
+| `POSTER_TMDB_IMAGE_BASE` | No (`https://image.tmdb.org/t/p`) | No | CDN base; the only host ever contacted |
+| `POSTER_TMDB_API_KEY` | **No** | **Yes** | See note below |
+| `POSTER_MAX_UPSTREAM_BYTES` | No (`20971520`) | No | Streaming byte cap |
+| `POSTER_MAX_SOURCE_DIMENSION` | No (`8000`) | No | Pre-decode dimension guard |
+| `POSTER_UPSTREAM_TIMEOUT_MS` | No (`3000`) | No | Total upstream timeout |
+| `AWS_ACCESS_KEY_ID` | If `s3` | **Yes** | Read by `object_store`, not by this service |
+| `AWS_SECRET_ACCESS_KEY` | If `s3` | **Yes** | Read by `object_store`, not by this service |
+| `AWS_REGION` | If `s3` | No | Read by `object_store`, not by this service |
+
+**Why the prefix.** The first implementation read unprefixed names with
+`deny_unknown_fields`. Those two do not work together: figment's raw
+environment provider merges *every* variable in the process, so loading failed
+on the first unrelated one — the service would not have started anywhere. A
+prefix scopes the strictness to variables meant for this service, keeping the
+useful half: a misspelled `POSTER_` variable fails at startup rather than
+being silently ignored.
+
+**Why AWS credentials are not `POSTER_`-prefixed.** They are read from the
+conventional names by `object_store`, which also understands IAM roles and
+instance metadata. Declaring them here would put a credential in two places
+and break every AWS tool that already expects those names.
 
 **`TMDB_API_KEY` is not required.** Clients supply `poster_path` directly, and
 `image.tmdb.org` serves artwork without authentication. The key is needed only

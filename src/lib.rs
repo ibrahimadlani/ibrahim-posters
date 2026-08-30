@@ -33,8 +33,10 @@
 #![warn(clippy::pedantic)]
 
 pub mod api;
+pub mod config;
 pub mod render;
 pub mod spec;
+pub mod state;
 pub mod storage;
 pub mod tmdb;
 
