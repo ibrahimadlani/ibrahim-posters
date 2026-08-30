@@ -539,13 +539,33 @@ Admission uses a **bounded wait**, not a bare `try_acquire`: `acquire` with a
 transient bursts that the queue would have absorbed well inside the latency
 budget. On timeout the response is `503` with `Retry-After: 1`.
 
-Singleflight collapses concurrent misses on one key. `DashMap<CacheKey,
-Weak<Notify>>` holding weak references so entries self-clean when the last
-waiter drops, avoiding the unbounded-map leak that a strong-reference version
-develops under key churn. First arrival renders; the rest await the `Notify`
-and then re-read L2.
+The permit is taken **inside the render path**, not around the handler. A
+request that hits L2 does no CPU work, and wrapping the handler would make a
+fully warm cache serve at the speed of its slowest concurrent render. The
+permit is also released before the L2 write, since it exists to bound CPU work
+and holding it across an I/O wait shrinks effective concurrency for nothing.
 
-Without this, a cold key going viral produces one render per concurrent
+Single-flight collapses concurrent work on one object. `DashMap<String,
+Weak<Notify>>` keyed by **storage path**, not by poster key. The leader's guard
+removes its entry and wakes waiters on drop, so a leader that fails or panics
+releases its followers rather than stranding them; the weak reference is the
+second line of defence against an entry outliving its leader.
+
+Keying by storage path rather than by poster key is a change from the original
+design, made because the original was insufficient. Four concurrent requests
+for four *different* posters built from one piece of artwork share no poster
+key, so coalescing on that key alone left them fetching the artwork four times
+and resizing it four times — the same thundering herd one layer down, on the
+stage measurement puts at 12.4 ms. This was caught by a test asserting one
+upstream fetch and observing four. Keying on the path each tier already
+computes collapses L1 sources, L1 logos and L2 posters with one mechanism.
+
+A follower whose wait expires re-reads the cache and renders if it is still
+empty. That is the behaviour without single-flight, and it is the correct
+degradation: treating an expired wait as a failure would turn one slow leader
+into a failed request for everyone behind it.
+
+Without any of this, a cold key going viral produces one render per concurrent
 request — exactly the shape of load that saturates the semaphore and turns a
 cache miss into an outage.
 

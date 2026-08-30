@@ -136,6 +136,14 @@ pub struct Config {
     /// Total upstream request timeout, in milliseconds.
     #[serde(default = "default_upstream_timeout_ms")]
     pub upstream_timeout_ms: u64,
+
+    /// Concurrent renders permitted.
+    ///
+    /// Defaults to the machine's core count. Renders are CPU-bound, so
+    /// admitting more work than there are cores raises latency without raising
+    /// throughput; the setting exists for containers whose CPU quota does not
+    /// match the core count the process can see.
+    pub render_concurrency: Option<usize>,
 }
 
 fn default_bind_addr() -> String {
@@ -202,6 +210,7 @@ impl Config {
             max_upstream_bytes: default_max_upstream_bytes(),
             max_source_dimension: default_max_source_dimension(),
             upstream_timeout_ms: default_upstream_timeout_ms(),
+            render_concurrency: None,
         }
     }
 
