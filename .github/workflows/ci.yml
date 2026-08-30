@@ -129,3 +129,81 @@ jobs:
         if: endsWith(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --target ${{ matrix.target }}
+
+  # The release images were built by CI but never executed, so nothing
+  # confirmed the binary actually starts inside them. A statically linked
+  # binary on `scratch` has exactly the failure mode this catches: it compiles,
+  # links, and then cannot find a certificate store or a loader at runtime.
+  image-smoke-test:
+    name: image-smoke-test (${{ matrix.suffix }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suffix: musl
+          - suffix: gnu
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.${{ matrix.suffix }}
+          push: false
+          load: true
+          tags: poster-service:${{ matrix.suffix }}
+          cache-from: type=gha,scope=${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.suffix }}
+
+      - name: Start the container
+        run: |
+          docker run -d --name poster \
+            -p 8080:8080 \
+            -e POSTER_BIND_ADDR=0.0.0.0:8080 \
+            -e POSTER_STORAGE_BACKEND=memory \
+            poster-service:${{ matrix.suffix }}
+
+      - name: Wait for readiness
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -sf localhost:8080/readyz >/dev/null; then
+              echo "ready after ${attempt} attempts"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the container never became ready"
+          docker logs poster
+          exit 1
+
+      - name: Exercise the endpoints
+        run: |
+          set -euo pipefail
+
+          curl -sf localhost:8080/healthz | grep -q ok
+          curl -sf localhost:8080/v1/presets | grep -q standard
+          curl -sf localhost:8080/metrics | grep -q poster_requests_total
+
+          # A poster the service cannot fetch: this exercises validation,
+          # hashing and the storage write without needing network egress to
+          # TMDB from a CI runner.
+          key=$(curl -sf -X POST localhost:8080/v1/posters \
+            -H 'content-type: application/json' \
+            -d '{"source":"/kqjL17yufvn9OVLyXYpvtyrFfak.jpg"}' \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["key"])')
+          test "${#key}" -eq 64
+
+          # And that a rejection is a problem document rather than a crash.
+          curl -s -X POST localhost:8080/v1/posters \
+            -H 'content-type: application/json' \
+            -d '{"source":"https://evil.test/x.jpg"}' \
+            | grep -q invalid_poster_path
+
+      - name: Report image size
+        run: docker image inspect poster-service:${{ matrix.suffix }} --format '{{.Size}}' | numfmt --to=iec
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker logs poster

@@ -878,7 +878,7 @@ Tag: **`v1.0.0`**.
 
 | Risk | Blast radius | Mitigation |
 |---|---|---|
-| ~~`webp` crate links system libwebp, breaking the static musl image~~ **Resolved at M0** | Release build fails; no runtime impact | `libwebp-sys` vendors and builds libwebp from source. Verified green on `x86_64-unknown-linux-musl` in CI, 2m49s. The `build-release` job keeps both targets so a regression is caught on every push rather than at release. |
+| ~~`webp` crate links system libwebp, breaking the static musl image~~ **Closed at M7** | Release build fails; no runtime impact | `libwebp-sys` vendors and builds libwebp from source. Beyond compiling, the image is now *started and exercised* on both architectures: 7.45 MB on amd64, 6.93 MB on arm64, both serving from `scratch` as a non-root user. CI builds and smoke-tests both images on every push, so a regression is caught before publication rather than after. |
 | Renderer change ships without a `RENDER_VERSION` bump | **Severe and silent.** Every cached poster serves stale pixels behind an `immutable` header with a one-year max-age, and there is no invalidation path | Visual regression diff without a version bump is a hard CI failure. This is the single most important gate in the pipeline. |
 | Latency target missed once badges are real | Missed p99; degraded UX under load | Benchmarks from M4, before the HTTP layer exists to hide the cost. Budget in § 5 has 22 ms of headroom. |
 | TMDB CDN slow or unavailable | Cold renders fail; cached posters unaffected | 3 s timeout, retryable error codes, L1 covers repeat sources for 30 days |
@@ -926,8 +926,13 @@ encodes **lossless only**, so it cannot produce the quality-82 lossy output
 the size budget assumes. Had vendoring failed, the real choice would have been
 a glibc image rather than a pure-Rust encoder.
 
-`build-release` keeps both targets on every push, so this stays verified
-rather than becoming a fact that was true once.
+`build-release` keeps both targets on every push, and `image-smoke-test`
+starts each image and exercises its endpoints, so this stays verified rather
+than becoming a fact that was true once.
+
+A compiling binary is not a running one, which is the gap that check closes: a
+statically linked binary on `scratch` has exactly the failure mode where it
+builds, links, and then cannot find a certificate store at runtime.
 
 ### 14.3 `try_acquire` is the wrong admission primitive here
 
