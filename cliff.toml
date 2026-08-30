@@ -40,7 +40,15 @@ commit_parsers = [
   { message = "^refactor", group = "<!-- 3 -->Changed" },
   { message = "^docs", group = "<!-- 4 -->Documentation" },
   { message = "^test", group = "<!-- 5 -->Testing" },
-  { message = "^(chore|ci|build)", skip = true },
+  # `chore` is grouped rather than skipped. Skipping it made v1.0.0 vanish
+  # from the changelog entirely, because every commit in that release was a
+  # chore -- and a release with no entry is worse than a noisy one.
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore: release", skip = true },
+  { message = "^chore", group = "<!-- 7 -->Maintenance" },
+  # `ci` and `build` stay skipped: they change how the project is built, not
+  # what it does, and a reader of a changelog is asking the second question.
+  { message = "^(ci|build)", skip = true },
   { message = "^revert", group = "<!-- 6 -->Reverted" },
 ]
 filter_commits = false
