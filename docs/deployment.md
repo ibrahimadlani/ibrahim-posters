@@ -20,6 +20,27 @@ not a variant anyone is expected to choose.
 
 Both run as a non-root user.
 
+### The `local` backend needs a mounted volume
+
+The musl image is `scratch` and runs as uid 65534. There is no `/tmp`, and the
+container root is not writable by that user, so `POSTER_STORAGE_BACKEND=local`
+fails at startup unless the path is a mounted volume:
+
+```
+Error: could not open storage at /tmp/store: Permission denied (os error 13)
+```
+
+```sh
+docker run -v /host/path:/data \
+  -e POSTER_STORAGE_BACKEND=local \
+  -e POSTER_STORAGE_LOCAL_PATH=/data \
+  ghcr.io/ibrahimadlani/ibrahim-posters:latest-musl
+```
+
+`memory` and `s3` need no filesystem and work as-is. This is a property of the
+image being minimal rather than a defect: a writable root would be a larger
+attack surface than the local backend is worth.
+
 ## Configuration
 
 Every service setting is a `POSTER_`-prefixed environment variable. The full
