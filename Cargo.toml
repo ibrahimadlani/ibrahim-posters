@@ -136,6 +136,10 @@ criterion = { version = "0.8", features = ["html_reports"] }
 wiremock = "0.6"
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "test-util"] }
 
+[[bench]]
+name = "render"
+harness = false
+
 [profile.release]
 # The render pipeline is the hot path and crosses several crate boundaries
 # (resize, blur, composite, encode). Cross-crate inlining is worth the compile
