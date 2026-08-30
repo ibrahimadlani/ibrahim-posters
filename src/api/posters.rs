@@ -16,11 +16,13 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
+use crate::admission::{self, Role};
 use crate::api::error::ApiError;
+use crate::observability::{self, Tier};
 use crate::render::{self, source};
 use crate::spec::{preset, CacheKey, OutputWidth, PosterRequest, ResolvedSpec};
 use crate::state::AppState;
-use crate::storage::Storage;
+use crate::storage::{keys, Storage};
 use crate::tmdb::{fetch, PosterPath, TmdbSize};
 
 /// Parses and validates a request body.
@@ -119,42 +121,106 @@ pub async fn get(
         .ok_or(ApiError::UnknownKey)?;
 
     // L2 hit: the common path once a poster has been requested even once.
-    if let Some(bytes) = state.storage.get_l2_poster(key).await? {
-        return Ok(poster_response(bytes.to_vec(), CacheStatus::Hit));
+    if let Some(bytes) = read_l2(&state, key).await? {
+        return Ok(poster_response(bytes, CacheStatus::Hit));
     }
 
+    // Single-flight. A cold key going viral would otherwise produce one render
+    // per concurrent request, which is the load shape that saturates admission
+    // and turns a cache miss into an outage.
+    match state.admission.join(keys::l2_poster(key)) {
+        Role::Leader(guard) => {
+            let rendered = render_and_cache(&state, key).await;
+            // Dropped explicitly rather than at end of scope, so waiters are
+            // released the moment the write lands rather than after the
+            // response has been built.
+            drop(guard);
+            Ok(poster_response(rendered?, CacheStatus::Miss))
+        }
+        Role::Follower(notify) => {
+            metrics::counter!(observability::SINGLEFLIGHT_COLLAPSED).increment(1);
+            admission::wait_for_leader(&notify).await;
+
+            // Re-read whether the wait completed or expired. A leader that
+            // failed leaves nothing behind, and a follower that then renders
+            // is exactly the behaviour without single-flight -- the correct
+            // degradation rather than a failed request.
+            if let Some(bytes) = read_l2(&state, key).await? {
+                return Ok(poster_response(bytes, CacheStatus::Coalesced));
+            }
+            Ok(poster_response(
+                render_and_cache(&state, key).await?,
+                CacheStatus::Miss,
+            ))
+        }
+    }
+}
+
+/// Reads the L2 tier, recording the outcome.
+async fn read_l2(state: &AppState, key: CacheKey) -> Result<Option<Vec<u8>>, ApiError> {
+    let found = state.storage.get_l2_poster(key).await?;
+    observability::record_cache_lookup(Tier::L2, found.is_some());
+    Ok(found.map(|bytes| bytes.to_vec()))
+}
+
+/// Renders a poster and writes it to the L2 tier.
+///
+/// Admission is acquired here rather than around the whole handler: a request
+/// that hits the cache does no CPU work and must not be made to queue behind
+/// one that does.
+async fn render_and_cache(state: &AppState, key: CacheKey) -> Result<Vec<u8>, ApiError> {
     let spec = state
         .storage
         .get_spec(key)
         .await?
         .ok_or(ApiError::UnknownKey)?;
+    observability::record_cache_lookup(Tier::Spec, true);
 
-    let assets = gather_assets(&state, &spec).await?;
+    let assets = gather_assets(state, &spec).await?;
 
+    let waiting = std::time::Instant::now();
+    let Some(slot) = state.admission.acquire().await else {
+        metrics::counter!(observability::ADMISSION_REJECTED).increment(1);
+        return Err(ApiError::Overloaded);
+    };
+    metrics::histogram!(observability::ADMISSION_WAIT).record(waiting.elapsed().as_secs_f64());
+
+    let started = std::time::Instant::now();
     // Rendering is CPU-bound and synchronous. Running it on a tokio worker
     // would block that worker for the whole render, starving every other
     // connection the runtime is multiplexing onto the same thread.
     let rendered = tokio::task::spawn_blocking(move || render::render_encoded(&spec, &assets))
         .await
         .map_err(|error| ApiError::RenderFailed(format!("render task failed: {error}")))??;
+    metrics::histogram!(observability::RENDER_DURATION).record(started.elapsed().as_secs_f64());
 
-    // Written before responding so a concurrent request for the same key finds
-    // it. Failing to cache is not worth failing the request over, so a write
-    // error is logged and the poster is still served.
+    // Released before the storage write: the slot bounds CPU work, and holding
+    // it across an I/O wait would shrink effective concurrency for no reason.
+    drop(slot);
+
+    // Failing to cache is not worth failing the request over, so a write error
+    // is logged and the poster is still served.
     if let Err(error) = state.storage.put_l2_poster(key, rendered.clone()).await {
         tracing::warn!(%error, key = %key, "rendered poster could not be cached");
     }
 
-    Ok(poster_response(rendered, CacheStatus::Miss))
+    Ok(rendered)
 }
 
 /// Whether a response came from the cache.
 #[derive(Debug, Clone, Copy)]
 enum CacheStatus {
-    /// Served from the L2 tier.
+    /// Served from the L2 tier on arrival.
     Hit,
     /// Rendered for this request.
     Miss,
+    /// Served from L2 after waiting for another request to render it.
+    ///
+    /// Distinguished from a plain hit because the two mean different things
+    /// operationally: a rising `HIT` rate is the cache working, while a rising
+    /// `COALESCED` rate is concurrent demand for cold keys, which is the
+    /// signal that capacity is the constraint.
+    Coalesced,
 }
 
 impl CacheStatus {
@@ -162,6 +228,7 @@ impl CacheStatus {
         match self {
             Self::Hit => "HIT",
             Self::Miss => "MISS",
+            Self::Coalesced => "COALESCED",
         }
     }
 }
@@ -209,11 +276,48 @@ async fn load_background(
     width: OutputWidth,
 ) -> Result<Vec<u8>, ApiError> {
     if let Some(cached) = state.storage.get_l1_source(path, width).await? {
+        observability::record_cache_lookup(Tier::L1Source, true);
         return Ok(cached.to_vec());
     }
+    observability::record_cache_lookup(Tier::L1Source, false);
 
+    // Coalesced separately from the poster. Several *different* posters built
+    // from one piece of artwork share no poster key, so without this they each
+    // fetch and resize that artwork independently.
+    let _guard = match state.admission.join(keys::l1_source(path, width)) {
+        Role::Leader(guard) => guard,
+        Role::Follower(notify) => {
+            metrics::counter!(observability::SINGLEFLIGHT_COLLAPSED).increment(1);
+            admission::wait_for_leader(&notify).await;
+            if let Some(cached) = state.storage.get_l1_source(path, width).await? {
+                observability::record_cache_lookup(Tier::L1Source, true);
+                return Ok(cached.to_vec());
+            }
+            // The leader failed or timed out. Proceeding without a guard is
+            // the degradation single-flight is allowed to make: redundant
+            // work rather than a failed request.
+            match state.admission.join(keys::l1_source(path, width)) {
+                Role::Leader(guard) => guard,
+                Role::Follower(_) => {
+                    return fetch_and_resize(state, path, width).await;
+                }
+            }
+        }
+    };
+
+    fetch_and_resize(state, path, width).await
+}
+
+/// Fetches artwork from upstream, resizes it to the frame, and caches it.
+async fn fetch_and_resize(
+    state: &AppState,
+    path: &PosterPath,
+    width: OutputWidth,
+) -> Result<Vec<u8>, ApiError> {
     let url = path.cdn_url(&state.config.tmdb_image_base, upstream_size(width));
+    let started = std::time::Instant::now();
     let fetched = fetch::fetch_image(&state.http, &url, state.config.fetch_limits()).await?;
+    metrics::histogram!(observability::UPSTREAM_DURATION).record(started.elapsed().as_secs_f64());
 
     let (target_width, target_height) = width.dimensions();
     let quality = state.config.intermediate_quality();
@@ -251,14 +355,39 @@ async fn load_background(
 /// photographic background tolerates it.
 async fn load_logo(state: &AppState, path: &PosterPath) -> Result<Vec<u8>, ApiError> {
     if let Some(cached) = state.storage.get_l1_logo(path).await? {
+        observability::record_cache_lookup(Tier::L1Logo, true);
         return Ok(cached.to_vec());
     }
+    observability::record_cache_lookup(Tier::L1Logo, false);
 
+    let _guard = match state.admission.join(keys::l1_logo(path)) {
+        Role::Leader(guard) => guard,
+        Role::Follower(notify) => {
+            metrics::counter!(observability::SINGLEFLIGHT_COLLAPSED).increment(1);
+            admission::wait_for_leader(&notify).await;
+            if let Some(cached) = state.storage.get_l1_logo(path).await? {
+                observability::record_cache_lookup(Tier::L1Logo, true);
+                return Ok(cached.to_vec());
+            }
+            match state.admission.join(keys::l1_logo(path)) {
+                Role::Leader(guard) => guard,
+                Role::Follower(_) => return fetch_logo(state, path).await,
+            }
+        }
+    };
+
+    fetch_logo(state, path).await
+}
+
+/// Fetches a logo from upstream and caches it unmodified.
+async fn fetch_logo(state: &AppState, path: &PosterPath) -> Result<Vec<u8>, ApiError> {
     // Requested at the larger size regardless of output width: a logo is
     // scaled down to its placement, and starting from more pixels costs one
     // resample rather than an upscale.
     let url = path.cdn_url(&state.config.tmdb_image_base, TmdbSize::W1280);
+    let started = std::time::Instant::now();
     let fetched = fetch::fetch_image(&state.http, &url, state.config.fetch_limits()).await?;
+    metrics::histogram!(observability::UPSTREAM_DURATION).record(started.elapsed().as_secs_f64());
 
     if let Err(error) = state.storage.put_l1_logo(path, fetched.bytes.clone()).await {
         tracing::warn!(%error, "logo could not be cached");

@@ -32,8 +32,10 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
 
+pub mod admission;
 pub mod api;
 pub mod config;
+pub mod observability;
 pub mod render;
 pub mod spec;
 pub mod state;

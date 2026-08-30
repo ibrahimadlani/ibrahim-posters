@@ -45,7 +45,19 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to read local address")?;
     tracing::info!(address = %bound, ?backend, "listening");
 
-    let state = AppState::new(config, storage).context("could not build the upstream client")?;
+    // Installed after the listener binds so a bind failure does not leave a
+    // global recorder registered in a process that is about to exit.
+    let metrics = poster_service::observability::install()
+        .context("could not install the metrics recorder")?;
+
+    let state = AppState::new(config, storage)
+        .context("could not build the upstream client")?
+        .with_metrics(metrics);
+
+    tracing::info!(
+        render_concurrency = state.admission.capacity(),
+        "admission control ready"
+    );
 
     axum::serve(listener, poster_service::api::router(&state))
         .with_graceful_shutdown(shutdown_signal())
