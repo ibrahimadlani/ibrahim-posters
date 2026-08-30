@@ -1,0 +1,50 @@
+---
+source: tests/spec_snapshots.rs
+expression: entries
+---
+[
+  [
+    "cinematic",
+    {
+      "blur_band_fraction": 0.42,
+      "blur_sigma": 36.0,
+      "darken_strength": 0.72,
+      "logo_width_fraction": 0.66,
+      "logo_bottom_fraction": 0.14,
+      "badge_height": 44
+    }
+  ],
+  [
+    "minimal",
+    {
+      "blur_band_fraction": 0.18,
+      "blur_sigma": 12.0,
+      "darken_strength": 0.35,
+      "logo_width_fraction": 0.5,
+      "logo_bottom_fraction": 0.09,
+      "badge_height": 36
+    }
+  ],
+  [
+    "poster_wall",
+    {
+      "blur_band_fraction": 0.34,
+      "blur_sigma": 28.0,
+      "darken_strength": 0.62,
+      "logo_width_fraction": 0.74,
+      "logo_bottom_fraction": 0.1,
+      "badge_height": 56
+    }
+  ],
+  [
+    "standard",
+    {
+      "blur_band_fraction": 0.3,
+      "blur_sigma": 24.0,
+      "darken_strength": 0.55,
+      "logo_width_fraction": 0.6,
+      "logo_bottom_fraction": 0.12,
+      "badge_height": 44
+    }
+  ]
+]

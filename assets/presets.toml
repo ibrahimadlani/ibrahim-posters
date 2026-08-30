@@ -1,0 +1,50 @@
+# Preset catalogue, embedded at compile time via include_str!.
+#
+# Geometry is authored at w1000 and scaled by OutputWidth::scale, so a preset
+# describes one layout rather than one layout per output size.
+#
+# Adding or changing a preset changes the resolved specifications it produces,
+# and therefore the cache keys derived from them. That is handled correctly by
+# construction -- the key is a hash of the resolved values, not of the preset
+# name -- so an edited preset simply produces new keys and leaves the old
+# renders reachable by their own keys.
+
+[standard]
+# The default. Band covers the lower third, which is where a title logo sits
+# on most theatrical artwork.
+blur_band_fraction = 0.30
+blur_sigma = 24.0
+darken_strength = 0.55
+logo_width_fraction = 0.60
+logo_bottom_fraction = 0.12
+badge_height = 44
+
+[cinematic]
+# Taller band and a heavier ramp, for artwork with a busy lower half where a
+# lighter treatment leaves the logo competing with detail.
+blur_band_fraction = 0.42
+blur_sigma = 36.0
+darken_strength = 0.72
+logo_width_fraction = 0.66
+logo_bottom_fraction = 0.14
+badge_height = 44
+
+[minimal]
+# Barely-there treatment for artwork that already has clean negative space at
+# the bottom. Low sigma keeps the underlying image legible.
+blur_band_fraction = 0.18
+blur_sigma = 12.0
+darken_strength = 0.35
+logo_width_fraction = 0.50
+logo_bottom_fraction = 0.09
+badge_height = 36
+
+[poster_wall]
+# Sized for thumbnail grids: a larger logo and taller badges survive being
+# displayed at a fraction of native resolution.
+blur_band_fraction = 0.34
+blur_sigma = 28.0
+darken_strength = 0.62
+logo_width_fraction = 0.74
+logo_bottom_fraction = 0.10
+badge_height = 56

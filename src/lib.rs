@@ -10,8 +10,11 @@
 //!
 //! - [`api`] is async and axum-aware. It owns extraction, status codes and
 //!   response shaping, and nothing else.
-//! - `spec` (from milestone M1) is pure and synchronous. It merges a request
-//!   with its preset, clamps the result and derives a cache key.
+//! - [`spec`] is pure and synchronous. It merges a request with its preset,
+//!   clamps the result and derives a cache key.
+//! - [`tmdb`] owns source addressing. A [`tmdb::PosterPath`] is proof that a
+//!   path is safe to append to the configured CDN base, which is the whole
+//!   SSRF control.
 //! - `render` (from milestone M4) is pure, synchronous, and depends only on a
 //!   resolved specification and byte buffers. It performs no I/O and knows
 //!   nothing about HTTP.
@@ -30,6 +33,8 @@
 #![warn(clippy::pedantic)]
 
 pub mod api;
+pub mod spec;
+pub mod tmdb;
 
 /// Version of the rendering pipeline, mixed into every cache key.
 ///

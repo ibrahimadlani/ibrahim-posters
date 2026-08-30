@@ -1,0 +1,26 @@
+---
+source: tests/spec_snapshots.rs
+expression: spec
+---
+{
+  "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+  "source_kind": "backdrop",
+  "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+  "badges": [
+    {
+      "text": "#17 IMDb",
+      "style": "accent"
+    },
+    {
+      "text": "Oscar Nominee",
+      "style": "outline"
+    }
+  ],
+  "width": "w2000",
+  "blur_band_fraction": 0.42,
+  "blur_sigma": 60.0,
+  "darken_strength": 0.8,
+  "logo_width_fraction": 0.66,
+  "logo_bottom_fraction": 0.14,
+  "badge_height": 88
+}

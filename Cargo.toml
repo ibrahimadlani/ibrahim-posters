@@ -82,6 +82,19 @@ moka = { version = "0.12", features = ["future"] }
 
 # --- Configuration ----------------------------------------------------------
 figment = { version = "0.10.19", features = ["env", "toml"] }
+# Parses the embedded preset catalogue. figment could do it, but the
+# catalogue is a compile-time constant rather than layered configuration,
+# and routing an include_str! through a config framework would be
+# indirection for its own sake.
+toml = "1.1"
+# Badge text is limited by grapheme cluster, not by byte or char. An emoji
+# with a skin-tone modifier is one thing a reader sees and several chars, so
+# a char limit would admit text far wider than the layout can hold.
+unicode-segmentation = "1.13"
+# NFC normalisation runs before the limit, so two spellings of one string --
+# precomposed against combining -- cannot yield two cache keys for a single
+# visual result.
+unicode-normalization = "0.1"
 # Wraps credentials so that #[derive(Debug)] on Config cannot leak them into a
 # log line.
 secrecy = "0.10"
