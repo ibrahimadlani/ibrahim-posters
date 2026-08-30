@@ -65,8 +65,21 @@ pub enum ConfigError {
         name: &'static str,
     },
     /// The object store could not be constructed.
-    #[error("could not open storage: {0}")]
-    Storage(String),
+    ///
+    /// Carries the path or bucket it failed on. Without it the message is
+    /// "permission denied" with nothing to act on, which is exactly the shape
+    /// of the failure an operator hits running the `scratch` image with the
+    /// local backend and no mounted volume.
+    // The field is `detail` rather than `source`: thiserror reserves that
+    // name for a nested error and requires it to implement Error, which a
+    // formatted string does not.
+    #[error("could not open storage at {location}: {detail}")]
+    Storage {
+        /// The path or bucket that could not be opened.
+        location: String,
+        /// What the backend reported.
+        detail: String,
+    },
 }
 
 /// Service configuration.
@@ -243,11 +256,19 @@ impl Config {
                             name: "STORAGE_LOCAL_PATH",
                         })?;
                 // Created rather than required to exist: a fresh local run
-                // should not need a mkdir first.
-                std::fs::create_dir_all(path)
-                    .map_err(|error| ConfigError::Storage(error.to_string()))?;
-                let store = object_store::local::LocalFileSystem::new_with_prefix(path)
-                    .map_err(|error| ConfigError::Storage(error.to_string()))?;
+                // should not need a mkdir first. On the scratch release image
+                // this is where an unmounted path fails, because the process
+                // runs as uid 65534 and cannot write to the container root.
+                std::fs::create_dir_all(path).map_err(|error| ConfigError::Storage {
+                    location: path.to_owned(),
+                    detail: error.to_string(),
+                })?;
+                let store = object_store::local::LocalFileSystem::new_with_prefix(path).map_err(
+                    |error| ConfigError::Storage {
+                        location: path.to_owned(),
+                        detail: error.to_string(),
+                    },
+                )?;
                 Ok(Storage::new(Arc::new(store)))
             }
             StorageBackend::S3 => {
@@ -272,9 +293,10 @@ impl Config {
                         .with_virtual_hosted_style_request(false);
                 }
 
-                let store = builder
-                    .build()
-                    .map_err(|error| ConfigError::Storage(error.to_string()))?;
+                let store = builder.build().map_err(|error| ConfigError::Storage {
+                    location: format!("s3://{bucket}"),
+                    detail: error.to_string(),
+                })?;
                 Ok(Storage::new(Arc::new(store)))
             }
         }
@@ -392,6 +414,24 @@ mod tests {
                 }
             ),
             "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn an_unwritable_path_is_reported_with_the_path() {
+        // The failure an operator hits running the scratch image with the
+        // local backend and no mounted volume. "Permission denied" alone
+        // gives them nothing to act on.
+        let mut config = base();
+        config.storage_backend = StorageBackend::Local;
+        config.storage_local_path = Some("/proc/nonexistent/store".to_owned());
+
+        let error = config.build_storage().expect_err("must fail");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("/proc/nonexistent/store"),
+            "the error does not name the path it failed on: {message}"
         );
     }
 
