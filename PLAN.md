@@ -773,7 +773,7 @@ Tag: **`v1.0.0`**.
 
 | Risk | Blast radius | Mitigation |
 |---|---|---|
-| `webp` crate links system libwebp, breaking the static musl image | Release build fails; no runtime impact | Build with the vendored libwebp feature and verify in CI on the musl target from M0, not at M7 when it would block a release. Fallback in § 14.2. |
+| ~~`webp` crate links system libwebp, breaking the static musl image~~ **Resolved at M0** | Release build fails; no runtime impact | `libwebp-sys` vendors and builds libwebp from source. Verified green on `x86_64-unknown-linux-musl` in CI, 2m49s. The `build-release` job keeps both targets so a regression is caught on every push rather than at release. |
 | Renderer change ships without a `RENDER_VERSION` bump | **Severe and silent.** Every cached poster serves stale pixels behind an `immutable` header with a one-year max-age, and there is no invalidation path | Visual regression diff without a version bump is a hard CI failure. This is the single most important gate in the pipeline. |
 | Latency target missed once badges are real | Missed p99; degraded UX under load | Benchmarks from M4, before the HTTP layer exists to hide the cost. Budget in § 5 has 22 ms of headroom. |
 | TMDB CDN slow or unavailable | Cold renders fail; cached posters unaffected | 3 s timeout, retryable error codes, L1 covers repeat sources for 30 days |
@@ -807,17 +807,22 @@ Worth noting that this only affects cold requests. At the stated > 90 % hit
 rate, the number nearly every client experiences is the L2 hit path — storage
 read plus response write, comfortably under 20 ms.
 
-### 14.2 WebP encoding and the static musl build
+### 14.2 WebP encoding and the static musl build — resolved
 
-The `webp` crate is a binding to libwebp, so the release image needs libwebp
-either vendored and statically linked or present in the runtime image. The
-vendored path is the intended one and is verified from M0.
+**Settled at M0, and the answer is favourable.** `libwebp-sys` vendors libwebp
+and builds it from source, so the static musl image needs no system package.
+Verified in CI: `cargo build --release --target x86_64-unknown-linux-musl`
+succeeds in 2m49s on a stock `ubuntu-latest` runner with `musl-tools`
+installed.
 
-The obvious pure-Rust fallback does not work: `image-webp` encodes **lossless
-only**, so it cannot produce the quality-82 lossy output the size budget
-assumes. If vendoring proves unworkable, the real choice is a glibc image
-rather than a pure-Rust encoder — which is a smaller concession than it
-sounds, and is the reason `build-release` builds both targets.
+Recorded here because the fallback was going to be worse than it first
+appears. The obvious pure-Rust substitute does not work at all: `image-webp`
+encodes **lossless only**, so it cannot produce the quality-82 lossy output
+the size budget assumes. Had vendoring failed, the real choice would have been
+a glibc image rather than a pure-Rust encoder.
+
+`build-release` keeps both targets on every push, so this stays verified
+rather than becoming a fact that was true once.
 
 ### 14.3 `try_acquire` is the wrong admission primitive here
 
