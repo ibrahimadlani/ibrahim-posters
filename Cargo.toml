@@ -103,7 +103,7 @@ unicode-segmentation = "1.13"
 unicode-normalization = "0.1"
 # Wraps credentials so that #[derive(Debug)] on Config cannot leak them into a
 # log line.
-secrecy = "0.10"
+secrecy = { version = "0.10", features = ["serde"] }
 num_cpus = "1.17"
 
 # --- Errors -----------------------------------------------------------------

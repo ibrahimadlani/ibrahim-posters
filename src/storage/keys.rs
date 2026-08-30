@@ -55,6 +55,41 @@ pub fn l1_source(source: &PosterPath, width: OutputWidth) -> String {
     format!("l1/{digest}/{}.webp", width_segment(width))
 }
 
+/// Path of a cached title logo in the L1 tier.
+///
+/// Logos are stored at their natural size and in their original encoding,
+/// unlike backgrounds. Two reasons: the renderer fits a logo to a placement
+/// derived from its intrinsic aspect ratio, so a logo pre-scaled to the poster
+/// frame would already have lost that ratio; and logos carry alpha and hard
+/// edges, which a lossy re-encode degrades visibly where a photographic
+/// background tolerates it.
+///
+/// Not keyed by width, because the stored bytes do not depend on one.
+///
+/// # Arguments
+///
+/// * `logo` — the validated TMDB path.
+///
+/// # Returns
+///
+/// A path of the form `l1/logo/{blake3-of-path}`.
+///
+/// # Examples
+///
+/// ```
+/// use poster_service::storage::keys;
+/// use poster_service::tmdb::PosterPath;
+///
+/// let logo = PosterPath::parse("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png")?;
+/// assert!(keys::l1_logo(&logo).starts_with("l1/logo/"));
+/// # Ok::<(), poster_service::tmdb::InvalidPosterPath>(())
+/// ```
+#[must_use]
+pub fn l1_logo(logo: &PosterPath) -> String {
+    let digest = blake3::hash(logo.as_str().as_bytes()).to_hex();
+    format!("l1/logo/{digest}")
+}
+
 /// Path of a rendered poster in the L2 tier.
 ///
 /// # Arguments
@@ -133,6 +168,22 @@ mod tests {
             l1_source(&source(), OutputWidth::W1000),
             l1_source(&source(), OutputWidth::W2000)
         );
+    }
+
+    #[test]
+    fn a_logo_and_a_background_from_one_path_do_not_share_an_entry() {
+        // They hold different bytes: a background is resized to the poster
+        // frame, a logo is stored at its natural size. Sharing an entry would
+        // serve one as the other.
+        assert_ne!(l1_logo(&source()), l1_source(&source(), OutputWidth::W1000));
+    }
+
+    #[test]
+    fn logo_paths_do_not_depend_on_output_width() {
+        // Stored at natural size, so a width in the key would just split one
+        // entry into two.
+        assert!(!l1_logo(&source()).contains("w1000"));
+        assert!(!l1_logo(&source()).contains("w2000"));
     }
 
     #[test]

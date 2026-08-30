@@ -9,17 +9,24 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
 
+/// Builds application state around a storage backend.
+fn state(storage: poster_service::storage::Storage) -> poster_service::state::AppState {
+    poster_service::state::AppState::new(poster_service::config::Config::defaults(), storage)
+        .expect("state builds")
+}
+
 #[tokio::test]
 async fn healthz_reports_ok() {
-    let response = poster_service::api::router(poster_service::storage::Storage::in_memory())
-        .oneshot(
-            Request::builder()
-                .uri("/healthz")
-                .body(Body::empty())
-                .expect("request builds"),
-        )
-        .await
-        .expect("router responds");
+    let response =
+        poster_service::api::router(&state(poster_service::storage::Storage::in_memory()))
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
 
     assert_eq!(response.status(), StatusCode::OK);
 
@@ -34,30 +41,32 @@ async fn healthz_reports_ok() {
 
 #[tokio::test]
 async fn readyz_reports_ready() {
-    let response = poster_service::api::router(poster_service::storage::Storage::in_memory())
-        .oneshot(
-            Request::builder()
-                .uri("/readyz")
-                .body(Body::empty())
-                .expect("request builds"),
-        )
-        .await
-        .expect("router responds");
+    let response =
+        poster_service::api::router(&state(poster_service::storage::Storage::in_memory()))
+            .oneshot(
+                Request::builder()
+                    .uri("/readyz")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
 
     assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
 async fn unknown_route_is_not_found() {
-    let response = poster_service::api::router(poster_service::storage::Storage::in_memory())
-        .oneshot(
-            Request::builder()
-                .uri("/nope")
-                .body(Body::empty())
-                .expect("request builds"),
-        )
-        .await
-        .expect("router responds");
+    let response =
+        poster_service::api::router(&state(poster_service::storage::Storage::in_memory()))
+            .oneshot(
+                Request::builder()
+                    .uri("/nope")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
@@ -78,7 +87,7 @@ async fn readyz_reports_unready_when_storage_is_unreachable() {
     let backend = LocalFileSystem::new_with_prefix(&not_a_directory).expect("constructs");
     let storage = poster_service::storage::Storage::new(Arc::new(backend));
 
-    let response = poster_service::api::router(storage)
+    let response = poster_service::api::router(&state(storage))
         .oneshot(
             Request::builder()
                 .uri("/readyz")
@@ -116,7 +125,7 @@ async fn healthz_stays_green_when_storage_is_unreachable() {
     let backend = LocalFileSystem::new_with_prefix(&not_a_directory).expect("constructs");
     let storage = poster_service::storage::Storage::new(Arc::new(backend));
 
-    let response = poster_service::api::router(storage)
+    let response = poster_service::api::router(&state(storage))
         .oneshot(
             Request::builder()
                 .uri("/healthz")

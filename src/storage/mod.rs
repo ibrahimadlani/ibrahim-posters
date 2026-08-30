@@ -162,6 +162,25 @@ impl Storage {
         self.put(&keys::l1_source(source, width), bytes).await
     }
 
+    /// Reads a cached title logo.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Backend`] if the read fails for a reason other than
+    /// absence.
+    pub async fn get_l1_logo(&self, logo: &PosterPath) -> Result<Option<Bytes>, StorageError> {
+        self.get(&keys::l1_logo(logo)).await
+    }
+
+    /// Writes a title logo to the L1 tier, unmodified.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Backend`] if the write fails.
+    pub async fn put_l1_logo(&self, logo: &PosterPath, bytes: Vec<u8>) -> Result<(), StorageError> {
+        self.put(&keys::l1_logo(logo), bytes).await
+    }
+
     /// Reads a rendered poster from the L2 tier.
     ///
     /// # Errors

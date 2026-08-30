@@ -11,17 +11,27 @@
 use std::net::SocketAddr;
 
 use anyhow::Context as _;
+use poster_service::config::Config;
+use poster_service::state::AppState;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _, EnvFilter};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_tracing();
+    // Loaded before tracing is configured because the log format is itself a
+    // configuration value. A failure here is reported by the error return.
+    let config = Config::from_env().context("could not load configuration")?;
+    init_tracing(&config);
 
-    let addr: SocketAddr = std::env::var("BIND_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:8080".to_owned())
-        .parse()
-        .context("BIND_ADDR is not a valid socket address")?;
+    let addr: SocketAddr = config.bind_addr.parse().with_context(|| {
+        format!(
+            "BIND_ADDR is not a valid socket address: {}",
+            config.bind_addr
+        )
+    })?;
+
+    let storage = config.build_storage().context("could not open storage")?;
+    let backend = config.storage_backend;
 
     let listener = TcpListener::bind(addr)
         .await
@@ -33,13 +43,11 @@ async fn main() -> anyhow::Result<()> {
     let bound = listener
         .local_addr()
         .context("failed to read local address")?;
-    tracing::info!(address = %bound, "listening");
+    tracing::info!(address = %bound, ?backend, "listening");
 
-    // In-memory until the configuration layer lands in M5; nothing yet
-    // reads or writes anything that must outlive the process.
-    let storage = poster_service::storage::Storage::in_memory();
+    let state = AppState::new(config, storage).context("could not build the upstream client")?;
 
-    axum::serve(listener, poster_service::api::router(storage))
+    axum::serve(listener, poster_service::api::router(&state))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server error")
@@ -51,11 +59,11 @@ async fn main() -> anyhow::Result<()> {
 /// deployed environment is the one that cannot be reconfigured after the fact,
 /// so it is the one that should not need an environment variable set correctly
 /// to produce parseable output.
-fn init_tracing() {
-    let filter = EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new("info"));
+fn init_tracing(config: &Config) {
+    let filter = EnvFilter::try_new(&config.log_level).unwrap_or_else(|_| EnvFilter::new("info"));
     let registry = tracing_subscriber::registry().with(filter);
 
-    if std::env::var("LOG_FORMAT").as_deref() == Ok("pretty") {
+    if config.log_format == "pretty" {
         registry
             .with(tracing_subscriber::fmt::layer().pretty())
             .init();

@@ -1,0 +1,127 @@
+---
+source: tests/api_snapshots.rs
+expression: "rendered.join(\"\\n\\n---\\n\\n\")"
+---
+code:          invalid_poster_path
+status:        400 Bad Request
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"title":"Bad Request","status":400,"code":"invalid_poster_path","detail":"poster path is not a valid TMDB path: path must begin with '/'","retryable":false}
+
+---
+
+code:          unknown_preset
+status:        400 Bad Request
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"title":"Bad Request","status":400,"code":"unknown_preset","detail":"unknown preset: nope","retryable":false}
+
+---
+
+code:          validation_failed
+status:        422 Unprocessable Entity
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"title":"Unprocessable Entity","status":422,"code":"validation_failed","detail":"at most 6 badges are allowed, found 12","retryable":false}
+
+---
+
+code:          malformed_request
+status:        400 Bad Request
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"title":"Bad Request","status":400,"code":"malformed_request","detail":"request body is malformed: expected value at line 1 column 3","retryable":false}
+
+---
+
+code:          unknown_key
+status:        404 Not Found
+content-type:  application/problem+json
+cache-control: public, max-age=60
+retry-after:   (none)
+body:          {"title":"Not Found","status":404,"code":"unknown_key","detail":"no specification stored for this key","retryable":false}
+
+---
+
+code:          source_not_found
+status:        404 Not Found
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"title":"Not Found","status":404,"code":"source_not_found","detail":"upstream artwork not found","retryable":false}
+
+---
+
+code:          source_too_large
+status:        502 Bad Gateway
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"title":"Bad Gateway","status":502,"code":"source_too_large","detail":"upstream response exceeded the byte cap","retryable":false}
+
+---
+
+code:          source_dimensions_exceeded
+status:        422 Unprocessable Entity
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"title":"Unprocessable Entity","status":422,"code":"source_dimensions_exceeded","detail":"source is 60000x60000, exceeding the 8000 px limit","retryable":false}
+
+---
+
+code:          source_decode_failed
+status:        502 Bad Gateway
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"title":"Bad Gateway","status":502,"code":"source_decode_failed","detail":"could not decode upstream artwork: not a recognised image","retryable":false}
+
+---
+
+code:          upstream_unavailable
+status:        502 Bad Gateway
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   1
+body:          {"title":"Bad Gateway","status":502,"code":"upstream_unavailable","detail":"upstream unavailable: upstream responded 503 Service Unavailable","retryable":true}
+
+---
+
+code:          upstream_timeout
+status:        504 Gateway Timeout
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   1
+body:          {"title":"Gateway Timeout","status":504,"code":"upstream_timeout","detail":"upstream timed out","retryable":true}
+
+---
+
+code:          overloaded
+status:        503 Service Unavailable
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   1
+body:          {"title":"Service Unavailable","status":503,"code":"overloaded","detail":"render capacity exhausted","retryable":true}
+
+---
+
+code:          storage_unavailable
+status:        503 Service Unavailable
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   2
+body:          {"title":"Service Unavailable","status":503,"code":"storage_unavailable","detail":"storage unavailable: connection refused","retryable":true}
+
+---
+
+code:          render_failed
+status:        500 Internal Server Error
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"title":"Internal Server Error","status":500,"code":"render_failed","detail":"render failed: could not encode output","retryable":false}

@@ -1,0 +1,90 @@
+---
+source: tests/api_snapshots.rs
+expression: table
+---
+[
+  {
+    "cache_control": "no-store",
+    "code": "invalid_poster_path",
+    "retry_after": null,
+    "status": 400
+  },
+  {
+    "cache_control": "no-store",
+    "code": "unknown_preset",
+    "retry_after": null,
+    "status": 400
+  },
+  {
+    "cache_control": "no-store",
+    "code": "validation_failed",
+    "retry_after": null,
+    "status": 422
+  },
+  {
+    "cache_control": "no-store",
+    "code": "malformed_request",
+    "retry_after": null,
+    "status": 400
+  },
+  {
+    "cache_control": "public, max-age=60",
+    "code": "unknown_key",
+    "retry_after": null,
+    "status": 404
+  },
+  {
+    "cache_control": "no-store",
+    "code": "source_not_found",
+    "retry_after": null,
+    "status": 404
+  },
+  {
+    "cache_control": "no-store",
+    "code": "source_too_large",
+    "retry_after": null,
+    "status": 502
+  },
+  {
+    "cache_control": "no-store",
+    "code": "source_dimensions_exceeded",
+    "retry_after": null,
+    "status": 422
+  },
+  {
+    "cache_control": "no-store",
+    "code": "source_decode_failed",
+    "retry_after": null,
+    "status": 502
+  },
+  {
+    "cache_control": "no-store",
+    "code": "upstream_unavailable",
+    "retry_after": 1,
+    "status": 502
+  },
+  {
+    "cache_control": "no-store",
+    "code": "upstream_timeout",
+    "retry_after": 1,
+    "status": 504
+  },
+  {
+    "cache_control": "no-store",
+    "code": "overloaded",
+    "retry_after": 1,
+    "status": 503
+  },
+  {
+    "cache_control": "no-store",
+    "code": "storage_unavailable",
+    "retry_after": 2,
+    "status": 503
+  },
+  {
+    "cache_control": "no-store",
+    "code": "render_failed",
+    "retry_after": null,
+    "status": 500
+  }
+]
