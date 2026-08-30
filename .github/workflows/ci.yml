@@ -53,6 +53,11 @@ jobs:
       matrix:
         toolchain: [stable, beta]
     continue-on-error: ${{ matrix.toolchain == 'beta' }}
+    env:
+      # Without this the pin in rust-toolchain.toml wins and both matrix legs
+      # run 1.98.0, so the beta leg reports a pass it never earned.
+      # RUSTUP_TOOLCHAIN takes precedence over the file.
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -111,8 +116,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      # rust-toolchain.toml pins 1.98.0, and rustup honours it over whatever
+      # the action just selected. Adding the target to `stable` therefore adds
+      # it to the wrong toolchain, and the build fails on a missing `core`.
+      # Add it to the toolchain that will actually be active.
+      - run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       # The webp crate builds libwebp from source. musl needs a cross linker,
       # and this is the job that proves the static image is buildable before a

@@ -140,7 +140,7 @@ only if a second binary needs it (see § 14.5).
 | `assets/presets.toml` | Preset catalogue, embedded via `include_str!`. |
 | `tests/` | Integration tests: HTTP round trip against wiremock and in-memory storage. |
 | `tests/module_boundary.rs` | Fails the build if `src/render/` acquires an async or I/O dependency. |
-| `tests/visual/` | Reference PNGs and the perceptual comparison harness. |
+| `tests/visual/` | Reference PNG files and the perceptual comparison harness. |
 | `benches/` | criterion benchmarks: blur, resize, encode, end-to-end. |
 
 ---
@@ -621,7 +621,7 @@ is the review prompt that a contract change deserves.
 
 Fixed synthetic fixtures — generated gradients and shapes, not TMDB artwork,
 so nothing copyrighted enters the repository — rendered and compared against
-committed reference PNGs.
+committed reference PNG files.
 
 Two rules make this gate meaningful rather than flaky:
 
