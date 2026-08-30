@@ -551,14 +551,17 @@ removes its entry and wakes waiters on drop, so a leader that fails or panics
 releases its followers rather than stranding them; the weak reference is the
 second line of defence against an entry outliving its leader.
 
-Keying by storage path rather than by poster key is a change from the original
-design, made because the original was insufficient. Four concurrent requests
-for four *different* posters built from one piece of artwork share no poster
-key, so coalescing on that key alone left them fetching the artwork four times
-and resizing it four times — the same thundering herd one layer down, on the
-stage measurement puts at 12.4 ms. This was caught by a test asserting one
-upstream fetch and observing four. Keying on the path each tier already
-computes collapses L1 sources, L1 logos and L2 posters with one mechanism.
+Keying by storage path rather than by poster key was introduced when the L1
+tier existed, to collapse concurrent work on a shared source as well as on a
+shared poster. With L1 removed there is nothing for a follower to collect
+after waiting on a source fetch, so coalescing now applies to rendered posters
+only. Two requests for one poster still produce one render and one fetch; two
+requests for different posters that happen to share artwork fetch it twice,
+which is the accepted cost recorded in `docs/adr/0007`.
+
+The path key is retained rather than reverted to a `CacheKey`, because it
+costs one allocation on a path already doing a storage write and leaves the
+mechanism ready if a coalescible tier is ever reintroduced.
 
 A follower whose wait expires re-reads the cache and renders if it is still
 empty. That is the behaviour without single-flight, and it is the correct
@@ -667,9 +670,15 @@ Secrets are wrapped in `secrecy::SecretString` so that `#[derive(Debug)]` on
 
 | Tier | Path | Content | Lifetime |
 |---|---|---|---|
-| L1 | `l1/{source_hash}/{width}.webp` | Source artwork, resized to target, WebP q90 | 30 days |
 | L2 | `l2/{key}.webp` | Final rendered poster | Immutable |
 | Spec | `spec/{key}.json` | The `ResolvedSpec` that produced the key | Immutable |
+
+**Source artwork is not stored.** An earlier design had an L1 tier holding the
+resized background and the logo, which saved a fetch and a 12.4 ms resize on
+every repeat source. It was removed: the service stores what it *produces*,
+not what it *consumes*, and a bucket full of resized TMDB posters is a
+redistribution of artwork this service has no right to redistribute. See
+`docs/adr/0007-do-not-persist-source-artwork.md`.
 
 `GET` responses carry `Cache-Control: public, max-age=31536000, immutable`.
 That header is only honest because the key is a hash of the resolved spec
@@ -678,11 +687,15 @@ renderer change can never be served from a stale entry. There is no
 invalidation path and none is needed, which is the whole point of content
 addressing.
 
-L1 exists because the resize is the second most expensive stage and its result
-is shared across every poster built from the same artwork at the same width.
-It is quality 90 rather than 82 because it is an intermediate that will be
-re-encoded; compounding lossy encodes at the delivery quality visibly degrades
-the result.
+The cost of dropping L1 is a fetch and a resize on every render, roughly 25 ms
+combined. It is bounded by how often a render happens at all: above the target
+hit rate a render is a small fraction of requests, and the saving L1 offered
+applied only to that fraction.
+
+Background artwork is still re-encoded at quality 90 rather than 82 before it
+reaches the renderer, because it is an intermediate that will be encoded again
+and compounding lossy passes at delivery quality visibly degrades the smooth
+gradients a blurred band is made of.
 
 ---
 

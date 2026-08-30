@@ -42,24 +42,29 @@ ignored. Variables outside that namespace are not read.
 
 ## Storage
 
-One bucket holds three prefixes:
+One bucket holds two prefixes:
 
 ```
-l1/{hash}/{width}.webp   resized source artwork
-l1/logo/{hash}           title logos, unmodified
-l2/{key}.webp            rendered posters
-spec/{key}.json          resolved specifications
+l2/{key}.webp     rendered posters
+spec/{key}.json   resolved specifications
 ```
 
-**Set a lifecycle rule expiring `l1/` after 30 days.** It is the one piece of
-required infrastructure that is not visible in the code: object storage has no
-native TTL, so the L1 tier's stated lifetime is enforced by the bucket or not
-at all. Losing an L1 object costs one upstream fetch and one resize; the tier
-refills itself.
+**No lifecycle rule is needed, and none should be set.** Rendered posters are
+served with a one-year `immutable` directive, and a specification is what
+makes its poster reproducible after the fact. Both are small and
+content-addressed, so nothing here goes stale.
 
-**Do not expire `l2/` or `spec/`.** Rendered posters are served with a
-one-year `immutable` directive, and a specification is what makes its poster
-reproducible. Both are small and content-addressed.
+**Source artwork is never written.** Backgrounds and logos are fetched from
+TMDB on each render and dropped with it. The bucket contains only output this
+service produced, which is what keeps its contents a question about cost
+rather than about redistribution rights. See
+[ADR 0007](adr/0007-do-not-persist-source-artwork.md).
+
+The practical consequence for capacity planning is that every render costs one
+or two TMDB fetches. Above the target hit rate a render is a small fraction of
+requests, but a cold start — a new deployment, or a `RENDER_VERSION` bump that
+orphans L2 — produces a burst of upstream traffic proportional to how quickly
+the cache refills.
 
 ## CDN
 
@@ -113,7 +118,8 @@ not a longer queue.
 | Metric | Signal |
 |---|---|
 | `poster_admission_rejected_total` | Rising means capacity is the constraint |
-| `poster_cache_lookups_total{tier="l2",result="miss"}` | Rising miss ratio means the cache is not doing its job |
+| `poster_cache_lookups_total{tier="l2",result="miss"}` | Rising miss ratio means the cache is not doing its job, and each miss is an upstream fetch |
+| `poster_upstream_duration_seconds{asset="background"}` | TMDB latency, which is now on the critical path of every render |
 | `poster_request_duration_seconds` | Latency, by route |
 | `poster_render_slots_available` | Sitting at zero means saturation |
 

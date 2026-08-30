@@ -19,7 +19,11 @@ pub const REQUEST_DURATION: &str = "poster_request_duration_seconds";
 pub const CACHE_LOOKUPS: &str = "poster_cache_lookups_total";
 /// Time spent rendering, excluding fetch and storage.
 pub const RENDER_DURATION: &str = "poster_render_duration_seconds";
-/// Time spent fetching artwork from upstream.
+/// Time spent fetching artwork from upstream, labelled by asset.
+///
+/// Labelled because background and logo have different sizes and different
+/// cost profiles, and a single series would average them into a number that
+/// describes neither.
 pub const UPSTREAM_DURATION: &str = "poster_upstream_duration_seconds";
 /// Requests rejected because no render slot became free in time.
 pub const ADMISSION_REJECTED: &str = "poster_admission_rejected_total";
@@ -99,10 +103,6 @@ pub fn describe() {
 /// Which cache tier a lookup hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
-    /// Resized source artwork.
-    L1Source,
-    /// Cached title logo.
-    L1Logo,
     /// Rendered poster.
     L2,
     /// Persisted specification.
@@ -114,8 +114,6 @@ impl Tier {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::L1Source => "l1_source",
-            Self::L1Logo => "l1_logo",
             Self::L2 => "l2",
             Self::Spec => "spec",
         }
@@ -252,7 +250,7 @@ mod tests {
 
     #[test]
     fn tier_labels_are_distinct() {
-        let mut labels: Vec<_> = [Tier::L1Source, Tier::L1Logo, Tier::L2, Tier::Spec]
+        let mut labels: Vec<_> = [Tier::L2, Tier::Spec]
             .iter()
             .map(|tier| tier.as_str())
             .collect();

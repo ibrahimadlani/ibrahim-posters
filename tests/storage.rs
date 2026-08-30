@@ -3,15 +3,15 @@
 //! No containers and no credentials: `object_store`'s `InMemory` backend is
 //! the reason ADR 0003 chose that crate over `aws-sdk-s3`.
 
-use poster_service::spec::{preset, request::PosterRequest, CacheKey, OutputWidth};
+use poster_service::spec::{preset, request::PosterRequest, CacheKey};
 use poster_service::storage::{keys, Storage, StorageError};
-use poster_service::tmdb::PosterPath;
 
 use std::sync::Arc;
 
+use futures_util::StreamExt as _;
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStoreExt as _, PutPayload};
+use object_store::{ObjectStore as _, ObjectStoreExt as _, PutPayload};
 
 /// Returns a `Storage` alongside the backend it wraps.
 ///
@@ -42,10 +42,6 @@ fn standard() -> poster_service::spec::ResolvedSpec {
     spec(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#)
 }
 
-fn source() -> PosterPath {
-    PosterPath::parse("/kqjL17yufvn9OVLyXYpvtyrFfak.jpg").expect("valid")
-}
-
 #[tokio::test]
 async fn a_miss_is_none_rather_than_an_error() {
     // The ordinary case on this path: every first request for a key misses.
@@ -60,11 +56,7 @@ async fn a_miss_is_none_rather_than_an_error() {
         .expect("no error")
         .is_none());
     assert!(storage.get_spec(key).await.expect("no error").is_none());
-    assert!(storage
-        .get_l1_source(&source(), OutputWidth::W1000)
-        .await
-        .expect("no error")
-        .is_none());
+    assert!(storage.get_spec(key).await.expect("no error").is_none());
 }
 
 #[tokio::test]
@@ -124,28 +116,35 @@ async fn poster_bytes_round_trip() {
 }
 
 #[tokio::test]
-async fn l1_entries_are_separated_by_width() {
-    // Sharing one entry across widths would serve a w1000 source into a
-    // w2000 render.
-    let storage = Storage::in_memory();
+async fn source_artwork_has_no_place_in_storage() {
+    // The service stores what it produces, not what it consumes. Only two
+    // prefixes exist, and neither can hold a fetched image.
+    let (storage, backend) = shared();
+    let spec = standard();
 
+    let key = storage.put_spec(&spec).await.expect("write succeeds");
     storage
-        .put_l1_source(&source(), OutputWidth::W1000, b"small".to_vec())
+        .put_l2_poster(key, b"pretend this is webp".to_vec())
         .await
         .expect("write succeeds");
 
-    assert!(storage
-        .get_l1_source(&source(), OutputWidth::W2000)
-        .await
-        .expect("read succeeds")
-        .is_none());
+    let mut listing = backend.list(None);
+    let mut prefixes = std::collections::BTreeSet::new();
+    while let Some(entry) = listing.next().await {
+        let path = entry.expect("listing succeeds").location.to_string();
+        prefixes.insert(
+            path.split('/')
+                .next()
+                .expect("a path has at least one segment")
+                .to_owned(),
+        );
+    }
 
-    let small = storage
-        .get_l1_source(&source(), OutputWidth::W1000)
-        .await
-        .expect("read succeeds")
-        .expect("present");
-    assert_eq!(&small[..], b"small");
+    assert_eq!(
+        prefixes,
+        ["l2".to_owned(), "spec".to_owned()].into_iter().collect(),
+        "storage holds a prefix other than rendered posters and specifications"
+    );
 }
 
 #[tokio::test]

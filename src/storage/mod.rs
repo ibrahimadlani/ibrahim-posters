@@ -1,5 +1,9 @@
 //! Object storage for the two cache tiers and specification persistence.
 //!
+//! Holds **rendered posters and the specifications that produced them, and
+//! nothing else**. Source artwork fetched from TMDB is never written here; see
+//! `docs/adr/0007-do-not-persist-source-artwork.md`.
+//!
 //! Backed by `object_store`, which abstracts S3, GCS and Azure behind one
 //! trait and ships `LocalFileSystem` and `InMemory` backends. Those two are
 //! the reason for the choice: integration tests run against `InMemory` with no
@@ -22,8 +26,7 @@ use bytes::Bytes;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt as _, PutPayload};
 
-use crate::spec::{CacheKey, OutputWidth, ResolvedSpec};
-use crate::tmdb::PosterPath;
+use crate::spec::{CacheKey, ResolvedSpec};
 
 /// Why a storage operation failed.
 ///
@@ -132,53 +135,6 @@ impl Storage {
             .put(&Path::from(path), PutPayload::from(bytes))
             .await?;
         Ok(())
-    }
-
-    /// Reads a resized source image from the L1 tier.
-    ///
-    /// # Errors
-    ///
-    /// [`StorageError::Backend`] if the read fails for a reason other than
-    /// absence.
-    pub async fn get_l1_source(
-        &self,
-        source: &PosterPath,
-        width: OutputWidth,
-    ) -> Result<Option<Bytes>, StorageError> {
-        self.get(&keys::l1_source(source, width)).await
-    }
-
-    /// Writes a resized source image to the L1 tier.
-    ///
-    /// # Errors
-    ///
-    /// [`StorageError::Backend`] if the write fails.
-    pub async fn put_l1_source(
-        &self,
-        source: &PosterPath,
-        width: OutputWidth,
-        bytes: Vec<u8>,
-    ) -> Result<(), StorageError> {
-        self.put(&keys::l1_source(source, width), bytes).await
-    }
-
-    /// Reads a cached title logo.
-    ///
-    /// # Errors
-    ///
-    /// [`StorageError::Backend`] if the read fails for a reason other than
-    /// absence.
-    pub async fn get_l1_logo(&self, logo: &PosterPath) -> Result<Option<Bytes>, StorageError> {
-        self.get(&keys::l1_logo(logo)).await
-    }
-
-    /// Writes a title logo to the L1 tier, unmodified.
-    ///
-    /// # Errors
-    ///
-    /// [`StorageError::Backend`] if the write fails.
-    pub async fn put_l1_logo(&self, logo: &PosterPath, bytes: Vec<u8>) -> Result<(), StorageError> {
-        self.put(&keys::l1_logo(logo), bytes).await
     }
 
     /// Reads a rendered poster from the L2 tier.

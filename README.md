@@ -44,6 +44,11 @@ The key is `blake3` over the *resolved and clamped* specification plus a
 the renderer ignores converge on one cache entry, and a renderer change
 invalidates every derived key mechanically rather than needing a purge.
 
+**Only rendered results are stored.** Background artwork and logos are fetched
+from TMDB for each render and never written to storage — the service keeps
+what it produces, not what it consumes. See
+[ADR 0007](docs/adr/0007-do-not-persist-source-artwork.md).
+
 ## Presets
 
 `standard`, `cinematic`, `minimal`, `poster_wall`. Each sets the blur band

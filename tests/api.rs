@@ -224,9 +224,14 @@ async fn equivalent_requests_converge_on_one_key() {
 }
 
 #[tokio::test]
-async fn one_upstream_fetch_serves_many_posters_from_the_same_source() {
-    // What the L1 tier is for: the resize is the second most expensive stage,
-    // and every poster built from one source at one width shares it.
+async fn every_render_fetches_its_source_from_upstream() {
+    // The service stores what it produces, not what it consumes. Three
+    // posters built from one piece of artwork fetch that artwork three times,
+    // because none of it is kept between renders.
+    //
+    // This is the deliberate cost of not persisting source artwork; the
+    // saving is that only rendered output is ever written to storage. See
+    // docs/adr/0007-do-not-persist-source-artwork.md.
     let harness = Harness::new().await;
 
     for preset in ["standard", "cinematic", "minimal"] {
@@ -245,9 +250,44 @@ async fn one_upstream_fetch_serves_many_posters_from_the_same_source() {
         .expect("recorded");
     assert_eq!(
         upstream_requests.len(),
-        1,
-        "expected one upstream fetch across three posters, got {}",
+        3,
+        "expected one fetch per render, got {}",
         upstream_requests.len()
+    );
+}
+
+#[tokio::test]
+async fn a_cached_poster_costs_no_upstream_fetch() {
+    // The saving that makes the above acceptable: a render happens once per
+    // key, so repeat requests reach neither TMDB nor the renderer.
+    let harness = Harness::new().await;
+    let (_, created) = harness.post(valid_request()).await;
+    let key = created["key"].as_str().expect("key");
+    let uri = format!("/v1/posters/{key}.webp");
+
+    assert_eq!(harness.get(&uri).await.status(), StatusCode::OK);
+    let after_first = harness
+        .upstream
+        .received_requests()
+        .await
+        .expect("recorded")
+        .len();
+
+    for _ in 0..5 {
+        let response = harness.get(&uri).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-cache"], "HIT");
+    }
+
+    let after_repeats = harness
+        .upstream
+        .received_requests()
+        .await
+        .expect("recorded")
+        .len();
+    assert_eq!(
+        after_first, after_repeats,
+        "a cached poster reached upstream"
     );
 }
 
@@ -590,10 +630,9 @@ async fn a_logo_keeps_its_aspect_ratio_through_the_http_path() {
 }
 
 #[tokio::test]
-async fn a_logo_is_cached_at_its_natural_size() {
-    // The logo tier stores unmodified bytes, so a second poster using the same
-    // logo must not refetch it -- and must not receive a background-shaped
-    // version of it either.
+async fn a_logo_is_fetched_for_each_render_and_never_stored() {
+    // Logos follow the same rule as backgrounds: fetched per render, never
+    // written to storage.
     let harness = Harness::new().await;
 
     for preset in ["standard", "cinematic"] {
@@ -620,7 +659,7 @@ async fn a_logo_is_cached_at_its_natural_size() {
         .count();
 
     assert_eq!(
-        logo_requests, 1,
-        "the logo was fetched {logo_requests} times"
+        logo_requests, 2,
+        "expected one logo fetch per render, got {logo_requests}"
     );
 }

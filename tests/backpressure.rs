@@ -214,8 +214,9 @@ async fn distinct_keys_render_concurrently() {
         concurrent_keys.push(create(&state, spec).await);
     }
 
-    // Warm L1 so neither measurement pays the upstream fetch, leaving render
-    // time as the only thing being compared.
+    // Both halves pay an identical upstream cost per request, so the
+    // comparison still isolates concurrency: what differs between them is
+    // only whether the work overlaps.
     let (status, _) = fetch(state.clone(), sequential_keys[0].clone()).await;
     assert_eq!(status, StatusCode::OK, "warm-up failed");
 
@@ -243,10 +244,15 @@ async fn distinct_keys_render_concurrently() {
          which is not the speed-up concurrency should give"
     );
 
-    // One upstream fetch across every request: L1 coalescing collapsed the
-    // shared source even though the posters differ.
+    // One fetch per render, since source artwork is never persisted. What
+    // single-flight still guarantees is that *duplicate* work is collapsed --
+    // asserted by `concurrent_requests_for_one_cold_key_fetch_upstream_once`
+    // -- not that unrelated posters share a fetch.
     let fetches = upstream.received_requests().await.expect("recorded").len();
-    assert_eq!(fetches, 1, "the shared source was fetched {fetches} times");
+    assert_eq!(
+        fetches, 7,
+        "expected one fetch per render across seven renders, got {fetches}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
