@@ -14,16 +14,18 @@ pub mod presets;
 use std::time::Duration;
 
 use axum::extract::{MatchedPath, Request};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::config::Config;
 use crate::state::AppState;
 
 /// Largest accepted request body.
@@ -77,6 +79,7 @@ pub fn router(state: &AppState) -> Router {
         // rather than fail one request. tiny-skia and resvg are not written to
         // be panic-free on adversarial geometry, and the byte-level guards
         // upstream cannot rule out every shape they might reject.
+        .layer(cors(&state.config))
         .layer(axum::middleware::from_fn(record_request))
         .layer(axum::middleware::from_fn(tag_request))
         .layer(CatchPanicLayer::new())
@@ -200,6 +203,46 @@ fn next_request_id() -> String {
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
     )
+}
+
+/// Builds the cross-origin policy.
+///
+/// A browser page cannot call this service without one, and the interactive
+/// playground in `site/` is a browser page. Without CORS it would have to be
+/// served from this service's own origin, which would make a static host like
+/// GitHub Pages useless for it.
+///
+/// Defaulting to any origin is safe here in a way it would not be for most
+/// services. CORS protects *ambient authority* — cookies, sessions, an
+/// `Authorization` header the browser attaches on the caller's behalf. This
+/// API has none of those, so a hostile page gains nothing by calling it that
+/// it could not do more easily from a server. The one thing it could spend is
+/// render capacity, which admission control already bounds.
+///
+/// `POSTER_CORS_ALLOW_ORIGINS` narrows it for a deployment that is not meant
+/// to be public.
+fn cors(config: &Config) -> CorsLayer {
+    let origins = config.cors_origins().map_or(AllowOrigin::any(), |list| {
+        AllowOrigin::list(
+            list.into_iter()
+                .filter_map(|origin| origin.parse::<HeaderValue>().ok()),
+        )
+    });
+
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, HeaderName::from_static(REQUEST_ID_HEADER)])
+        // Without these a browser can read the status but not the headers that
+        // explain it: whether the poster was cached, and the id to quote when
+        // reporting a problem.
+        .expose_headers([
+            HeaderName::from_static("x-cache"),
+            HeaderName::from_static(REQUEST_ID_HEADER),
+            header::RETRY_AFTER,
+            header::CACHE_CONTROL,
+        ])
+        .max_age(Duration::from_secs(3600))
 }
 
 #[cfg(test)]
