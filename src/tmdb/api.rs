@@ -292,18 +292,17 @@ pub async fn catalogue(
 
     let mut posters = rank_posters(&images.posters, language);
 
-    // The editorially primary poster is offered but not promoted. It is
-    // almost always the titled one -- Inception's is tagged `en` -- so putting
-    // it first would defeat the textless preference this ranking exists for.
-    // Appended rather than dropped when `/images` omits it, which happens when
-    // it carries a language the include filter excluded: a title whose only
-    // poster is in an unlisted language then still has one.
-    if let Some(primary) = detail
-        .poster_path
-        .as_deref()
-        .and_then(|path| PosterPath::parse(path).ok())
-    {
-        if !posters.iter().any(|option| option.path == primary) {
+    // The editorially primary poster is a last resort, not a default. It is
+    // almost always the titled one -- Inception's is tagged `en` -- so adding
+    // it to a list of textless posters would undo the filter above. It is used
+    // only when the title offers nothing else, which happens when every one of
+    // its posters carries a language the include filter excluded.
+    if posters.is_empty() {
+        if let Some(primary) = detail
+            .poster_path
+            .as_deref()
+            .and_then(|path| PosterPath::parse(path).ok())
+        {
             posters.push(ArtworkOption {
                 path: primary,
                 language: None,
@@ -332,26 +331,42 @@ fn is_textless(language: Option<&str>) -> bool {
     matches!(language, None | Some("xx"))
 }
 
-/// Orders posters best first, preferring textless artwork.
+/// Returns the textless posters a title offers, best first.
 ///
-/// **Posters rank the opposite way to logos.** A poster is a background that a
-/// title logo gets composited onto, so artwork carrying no language is what we
-/// want: on TMDB those are the textless versions, without the title treatment
-/// or the credits block. Choosing a localised poster instead produces a poster
-/// with its title printed twice — once in the artwork and once in the logo
-/// placed over it.
+/// **Filtered, not merely ordered.** A poster here is a background that a
+/// title logo gets composited onto, so one that already carries a title
+/// treatment is not a worse choice — it is the wrong kind of thing. Offering
+/// it invites a poster with its title printed twice.
 ///
-/// After that band it is the requested language, then anything else; within a
-/// band, highest rated, with votes breaking a rating tie.
+/// TMDB marks textless artwork two ways: a null `iso_639_1` ("No Language")
+/// and the code `xx` ("Not Specified").
+///
+/// # The fallback, and why it exists
+///
+/// A title with *no* textless poster falls back to everything it has, ranked
+/// by the requested language. That is not hedging: measured across twenty
+/// titles, every popular one offered between 4 and 32 textless posters, but
+/// four of ten obscure ones offered none at all — Ariel, Shadows in Paradise,
+/// Four Rooms and Local Hero among them. Without the fallback those titles
+/// would return `no_artwork_available` and could not be rendered at all,
+/// which is a worse outcome than a poster whose title shows through.
+///
+/// A caller can tell which happened without a flag: every option carries its
+/// `language`, so a list where none is null or `xx` is a list that fell back.
 fn rank_posters(entries: &[ImageEntry], language: &str) -> Vec<ArtworkOption> {
+    let textless: Vec<ArtworkOption> = rank_by(entries, |option| {
+        u8::from(!is_textless(option.language.as_deref()))
+    })
+    .into_iter()
+    .filter(|option| is_textless(option.language.as_deref()))
+    .collect();
+
+    if !textless.is_empty() {
+        return textless;
+    }
+
     rank_by(entries, |option| {
-        if is_textless(option.language.as_deref()) {
-            0
-        } else if option.language.as_deref() == Some(language) {
-            1
-        } else {
-            2
-        }
+        u8::from(option.language.as_deref() != Some(language))
     })
 }
 
@@ -465,45 +480,79 @@ mod tests {
     }
 
     #[test]
-    fn a_textless_poster_outranks_a_localised_one() {
-        // The whole point of ranking posters differently from logos. A poster
-        // is a background for a logo, so the version without a title
-        // treatment is what is wanted -- otherwise the title appears twice,
-        // once in the artwork and once in the logo placed over it.
+    fn only_textless_posters_are_offered() {
+        // Filtered, not merely ordered. A poster carrying its own title is not
+        // a worse background for a logo, it is the wrong kind of thing.
         let entries = [
             entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", Some("en"), 9.0, 900),
             entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpg", None, 1.0, 1),
+            entry("/cccccccccccccccccccccccccccc.jpg", Some("fr"), 8.0, 400),
         ];
         let ranked = rank_posters(&entries, "en");
 
+        assert_eq!(ranked.len(), 1, "a localised poster survived the filter");
+        assert_eq!(ranked[0].language, None);
+    }
+
+    #[test]
+    fn a_title_with_no_textless_poster_falls_back_to_what_it_has() {
+        // Four of ten obscure titles measured against live TMDB offered no
+        // textless poster at all -- Ariel, Shadows in Paradise, Four Rooms and
+        // Local Hero. Without this they could not be rendered at all, which is
+        // worse than a poster whose title shows through.
+        let entries = [
+            entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", Some("fr"), 9.0, 900),
+            entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpg", Some("en"), 1.0, 1),
+        ];
+        let ranked = rank_posters(&entries, "en");
+
+        assert_eq!(ranked.len(), 2, "the fallback dropped artwork");
         assert_eq!(
-            ranked[0].language, None,
-            "a localised poster outranked a textless one"
+            ranked[0].language.as_deref(),
+            Some("en"),
+            "the fallback ignored the requested language"
         );
+    }
+
+    #[test]
+    fn the_fallback_is_visible_from_the_response_alone() {
+        // No flag is needed: a caller sees every option's language, so a list
+        // with nothing null or `xx` is a list that fell back.
+        let only_localised = [entry(
+            "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg",
+            Some("en"),
+            9.0,
+            9,
+        )];
+        let has_textless = [
+            entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", Some("en"), 9.0, 9),
+            entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpg", None, 1.0, 1),
+        ];
+
+        assert!(rank_posters(&only_localised, "en")
+            .iter()
+            .all(|option| !is_textless(option.language.as_deref())));
+        assert!(rank_posters(&has_textless, "en")
+            .iter()
+            .all(|option| is_textless(option.language.as_deref())));
     }
 
     #[test]
     fn not_specified_counts_as_textless_for_posters() {
         // TMDB marks artwork with no language two ways: a null code shown as
-        // "No Language", and `xx` shown as "Not Specified". Both are textless.
+        // "No Language", and `xx` shown as "Not Specified". Both are textless,
+        // and both must survive the filter.
         let entries = [
             entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", Some("en"), 9.0, 900),
             entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpg", Some("xx"), 1.0, 1),
+            entry("/cccccccccccccccccccccccccccc.jpg", None, 0.5, 1),
         ];
         let ranked = rank_posters(&entries, "en");
-        assert_eq!(ranked[0].language.as_deref(), Some("xx"));
-    }
 
-    #[test]
-    fn a_localised_poster_still_beats_an_unrelated_language() {
-        // Textless first, then the requested language, then anything else --
-        // so a title with no textless poster still gets a sensible one.
-        let entries = [
-            entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", Some("ru"), 9.0, 900),
-            entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpg", Some("en"), 1.0, 1),
-        ];
-        let ranked = rank_posters(&entries, "en");
-        assert_eq!(ranked[0].language.as_deref(), Some("en"));
+        assert_eq!(ranked.len(), 2, "only the two textless entries belong here");
+        assert!(ranked
+            .iter()
+            .all(|option| is_textless(option.language.as_deref())));
     }
 
     #[test]
