@@ -7,8 +7,11 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::clamp;
-use crate::spec::request::{PosterRequest, SpecError};
+use crate::spec::request::{LogoChoice, PosterChoice, PosterRequest, SpecError};
 use crate::spec::resolved::ResolvedSpec;
+use crate::tmdb::api::Artwork;
+use crate::tmdb::api::Catalogue;
+use crate::tmdb::PosterPath;
 
 /// The catalogue source, embedded so that a deployment cannot disagree with
 /// the binary about what `"standard"` means.
@@ -99,6 +102,11 @@ impl Preset {
     /// # Arguments
     ///
     /// * `request` — the request to resolve against this preset.
+    /// * `catalogue` — what the request's identifier resolved to.
+    ///
+    /// The catalogue is passed in rather than fetched here, so that this
+    /// module stays pure: the lookup is a network call, and putting one behind
+    /// this function would make every specification test need a stub.
     ///
     /// # Returns
     ///
@@ -108,15 +116,19 @@ impl Preset {
     ///
     /// Propagates badge validation failures from
     /// [`PosterRequest::normalised_badges`].
-    pub fn resolve(&self, request: &PosterRequest) -> Result<ResolvedSpec, SpecError> {
+    pub fn resolve(
+        &self,
+        request: &PosterRequest,
+        catalogue: &Catalogue,
+    ) -> Result<ResolvedSpec, SpecError> {
+        let artwork = select(request, catalogue)?;
         let badges = request.normalised_badges()?;
         let overrides = request.overrides;
         let scale = request.width.scale();
 
         Ok(ResolvedSpec {
-            source: request.source.clone(),
-            source_kind: request.source_kind,
-            logo: request.logo.clone(),
+            source: artwork.poster.clone(),
+            logo: artwork.logo.clone(),
             badges,
             width: request.width,
             blur_band_fraction: clamp::f32_into(
@@ -160,6 +172,7 @@ impl Preset {
 /// # Arguments
 ///
 /// * `request` — the validated wire request.
+/// * `artwork` — the paths its catalogue identifier resolved to.
 ///
 /// # Returns
 ///
@@ -169,10 +182,53 @@ impl Preset {
 ///
 /// [`SpecError::UnknownPreset`] if the named preset is not in the catalogue,
 /// or any badge validation failure.
-pub fn resolve(request: &PosterRequest) -> Result<ResolvedSpec, SpecError> {
+pub fn resolve(request: &PosterRequest, catalogue: &Catalogue) -> Result<ResolvedSpec, SpecError> {
     let preset =
         lookup(&request.preset).ok_or_else(|| SpecError::UnknownPreset(request.preset.clone()))?;
-    preset.resolve(request)
+    preset.resolve(request, catalogue)
+}
+
+/// Applies a request's artwork choices to what the title offers.
+///
+/// An explicit choice is checked against the catalogue rather than taken on
+/// trust. The path grammar already confines a value to the TMDB CDN, so this
+/// is not a security control -- it stops a caller compositing one title's logo
+/// onto another's poster by accident, and turns a stale path from a cached
+/// catalogue into a clear error rather than a poster nobody asked for.
+fn select(request: &PosterRequest, catalogue: &Catalogue) -> Result<Artwork, SpecError> {
+    let automatic = catalogue
+        .best()
+        .map_err(|error| SpecError::NoArtwork(error.to_string()))?;
+
+    let poster = match &request.poster {
+        PosterChoice::Auto => automatic.poster,
+        PosterChoice::Explicit(path) => {
+            ensure_offered(catalogue, path)?;
+            path.clone()
+        }
+    };
+
+    let logo = match &request.logo {
+        LogoChoice::Auto => automatic.logo,
+        LogoChoice::Omit => None,
+        LogoChoice::Explicit(path) => {
+            ensure_offered(catalogue, path)?;
+            Some(path.clone())
+        }
+    };
+
+    Ok(Artwork { poster, logo })
+}
+
+/// Rejects artwork the title does not offer.
+fn ensure_offered(catalogue: &Catalogue, path: &PosterPath) -> Result<(), SpecError> {
+    if catalogue.offers(path) {
+        Ok(())
+    } else {
+        Err(SpecError::ArtworkNotOffered {
+            path: path.as_str().to_owned(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -181,12 +237,33 @@ mod tests {
     use crate::spec::request::{OutputWidth, Overrides};
     use crate::tmdb::PosterPath;
 
+    /// A catalogue offering one poster and one logo.
+    fn catalogue() -> Catalogue {
+        use crate::tmdb::api::{ArtworkOption, MediaKind};
+        let option = |path: &str| ArtworkOption {
+            path: PosterPath::parse(path).expect("valid"),
+            language: Some("en".to_owned()),
+            vote_average: 5.0,
+            vote_count: 10,
+            width: 2000,
+            height: 3000,
+        };
+        Catalogue {
+            kind: MediaKind::Movie,
+            id: 27205,
+            posters: vec![option("/kqjL17yufvn9OVLyXYpvtyrFfak.jpg")],
+            logos: vec![option("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png")],
+        }
+    }
+
     fn request() -> PosterRequest {
         PosterRequest {
-            source: PosterPath::parse("/kqjL17yufvn9OVLyXYpvtyrFfak.jpg").expect("valid"),
-            source_kind: crate::tmdb::SourceKind::Poster,
+            tmdb_movie_id: Some(27205),
+            tmdb_tv_id: None,
+            language: "en".to_owned(),
+            poster: PosterChoice::Auto,
+            logo: LogoChoice::Auto,
             preset: "standard".to_owned(),
-            logo: None,
             badges: Vec::new(),
             width: OutputWidth::W1000,
             overrides: Overrides::default(),
@@ -233,7 +310,7 @@ mod tests {
 
     #[test]
     fn none_inherits_from_the_preset_rather_than_zeroing() {
-        let resolved = resolve(&request()).expect("resolves");
+        let resolved = resolve(&request(), &catalogue()).expect("resolves");
         let preset = lookup("standard").expect("present");
         assert!((resolved.blur_sigma - preset.blur_sigma).abs() < f32::EPSILON);
     }
@@ -242,7 +319,7 @@ mod tests {
     fn an_override_beats_the_preset() {
         let mut req = request();
         req.overrides.blur_sigma = Some(8.0);
-        let resolved = resolve(&req).expect("resolves");
+        let resolved = resolve(&req, &catalogue()).expect("resolves");
         assert!((resolved.blur_sigma - 8.0).abs() < f32::EPSILON);
     }
 
@@ -250,7 +327,7 @@ mod tests {
     fn overrides_are_clamped_after_merging() {
         let mut req = request();
         req.overrides.blur_sigma = Some(10_000.0);
-        let resolved = resolve(&req).expect("resolves");
+        let resolved = resolve(&req, &catalogue()).expect("resolves");
         assert!((resolved.blur_sigma - *clamp::BLUR_SIGMA.end()).abs() < f32::EPSILON);
     }
 
@@ -258,8 +335,8 @@ mod tests {
     fn pixel_fields_scale_with_output_width_and_fractions_do_not() {
         let mut req = request();
         req.width = OutputWidth::W2000;
-        let big = resolve(&req).expect("resolves");
-        let small = resolve(&request()).expect("resolves");
+        let big = resolve(&req, &catalogue()).expect("resolves");
+        let small = resolve(&request(), &catalogue()).expect("resolves");
 
         assert!(
             (big.blur_sigma - small.blur_sigma * 2.0).abs() < f32::EPSILON,
@@ -273,11 +350,70 @@ mod tests {
     }
 
     #[test]
+    fn auto_selection_takes_the_first_of_each_list() {
+        let resolved = resolve(&request(), &catalogue()).expect("resolves");
+        assert_eq!(resolved.source, catalogue().posters[0].path);
+        assert_eq!(resolved.logo, Some(catalogue().logos[0].path.clone()));
+    }
+
+    #[test]
+    fn a_logo_can_be_omitted_entirely() {
+        let mut req = request();
+        req.logo = LogoChoice::Omit;
+        assert_eq!(resolve(&req, &catalogue()).expect("resolves").logo, None);
+    }
+
+    #[test]
+    fn an_explicit_choice_is_honoured_when_the_title_offers_it() {
+        let mut req = request();
+        req.logo = LogoChoice::Explicit(
+            PosterPath::parse("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png").expect("valid"),
+        );
+        assert_eq!(
+            resolve(&req, &catalogue()).expect("resolves").logo,
+            Some(PosterPath::parse("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png").expect("valid"))
+        );
+    }
+
+    #[test]
+    fn artwork_from_another_title_is_rejected() {
+        // Not a security control -- the path grammar already confines a value
+        // to the TMDB CDN -- but it stops one title's logo landing on
+        // another's poster, and turns a stale path into a clear error.
+        let mut req = request();
+        req.poster = PosterChoice::Explicit(
+            PosterPath::parse("/zzzzzzzzzzzzzzzzzzzzzzzzzzzz.jpg").expect("valid"),
+        );
+
+        assert!(matches!(
+            resolve(&req, &catalogue()),
+            Err(SpecError::ArtworkNotOffered { .. })
+        ));
+    }
+
+    #[test]
+    fn a_catalogue_with_no_posters_is_reported_as_such() {
+        let mut empty = catalogue();
+        empty.posters.clear();
+        assert!(matches!(
+            resolve(&request(), &empty),
+            Err(SpecError::NoArtwork(_))
+        ));
+    }
+
+    #[test]
+    fn a_catalogue_with_no_logos_renders_without_one() {
+        let mut no_logos = catalogue();
+        no_logos.logos.clear();
+        assert_eq!(resolve(&request(), &no_logos).expect("resolves").logo, None);
+    }
+
+    #[test]
     fn an_unknown_preset_is_reported_by_name() {
         let mut req = request();
         req.preset = "nope".to_owned();
         assert_eq!(
-            resolve(&req),
+            resolve(&req, &catalogue()),
             Err(SpecError::UnknownPreset("nope".to_owned()))
         );
     }

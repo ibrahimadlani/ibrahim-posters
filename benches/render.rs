@@ -33,8 +33,24 @@ fn synthetic(width: u32, height: u32) -> Rgba8 {
 }
 
 fn spec_from(json: &str) -> ResolvedSpec {
+    use poster_service::tmdb::api::{ArtworkOption, Catalogue, MediaKind};
+    use poster_service::tmdb::PosterPath;
+
     let request: PosterRequest = serde_json::from_str(json).expect("valid request");
-    preset::resolve(&request).expect("resolves")
+    let catalogue = Catalogue {
+        kind: MediaKind::Movie,
+        id: 27205,
+        posters: vec![ArtworkOption {
+            path: PosterPath::parse("/kqjL17yufvn9OVLyXYpvtyrFfak.jpg").expect("valid"),
+            language: Some("en".to_owned()),
+            vote_average: 8.0,
+            vote_count: 100,
+            width: 2000,
+            height: 3000,
+        }],
+        logos: Vec::new(),
+    };
+    preset::resolve(&request, &catalogue).expect("resolves")
 }
 
 /// Blur cost against downscale factor.
@@ -111,20 +127,14 @@ fn bench_end_to_end(c: &mut Criterion) {
         encode::webp(&synthetic(1200, 1800), encode::INTERMEDIATE_QUALITY).expect("encodes");
 
     let cases = [
-        (
-            "bare",
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#,
-        ),
+        ("bare", r#"{ "tmdb_movie_id": 27205 }"#),
         (
             "with_badges",
-            r##"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r##"{ "tmdb_movie_id": 27205,
                   "badges": [{ "text": "#17 IMDb", "style": "accent" },
                              { "text": "Oscar Nominee", "style": "outline" }] }"##,
         ),
-        (
-            "w2000",
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "width": "w2000" }"#,
-        ),
+        ("w2000", r#"{ "tmdb_movie_id": 27205, "width": "w2000" }"#),
     ];
 
     let mut group = c.benchmark_group("render_end_to_end");

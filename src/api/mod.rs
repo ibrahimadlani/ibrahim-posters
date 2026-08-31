@@ -4,6 +4,7 @@
 //! deals in domain types and byte buffers, which is what keeps the renderer
 //! testable without a runtime.
 
+pub mod artwork;
 pub mod error;
 pub mod health;
 pub mod metrics;
@@ -67,6 +68,7 @@ pub fn router(state: &AppState) -> Router {
     Router::new()
         .route("/v1/posters", post(posters::create))
         .route("/v1/posters/{key}", get(posters::get))
+        .route("/v1/artwork/{kind}/{id}", get(artwork::list))
         .route("/v1/presets", get(presets::list))
         .route("/metrics", get(metrics::scrape))
         .with_state(state.clone())
@@ -126,6 +128,7 @@ const UNMATCHED: &str = "unmatched";
 fn label_for(matched: &str) -> &'static str {
     match matched {
         "/v1/posters" => "/v1/posters",
+        "/v1/artwork/{kind}/{id}" => "/v1/artwork/{kind}/{id}",
         "/v1/posters/{key}" => "/v1/posters/{key}",
         "/v1/presets" => "/v1/presets",
         "/healthz" => "/healthz",
@@ -142,6 +145,7 @@ mod tests {
     /// Every route the router mounts.
     const ROUTES: &[&str] = &[
         "/v1/posters",
+        "/v1/artwork/{kind}/{id}",
         "/v1/posters/{key}",
         "/v1/presets",
         "/healthz",

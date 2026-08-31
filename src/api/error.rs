@@ -23,6 +23,31 @@ pub enum ApiError {
     #[error("poster path is not a valid TMDB path: {0}")]
     InvalidPosterPath(#[from] InvalidPosterPath),
 
+    /// No entry in the TMDB catalogue under this identifier.
+    #[error("no {kind} in the TMDB catalogue with id {id}")]
+    TmdbNotFound {
+        /// Which catalogue was searched.
+        kind: &'static str,
+        /// The identifier supplied.
+        id: u32,
+    },
+
+    /// The catalogue entry exists but has no poster this service can use.
+    #[error("{0}")]
+    NoArtworkAvailable(String),
+
+    /// No TMDB credential is configured.
+    ///
+    /// A deployment fault rather than a caller fault, but it is surfaced with
+    /// its own code so an operator reading a log sees what to set instead of a
+    /// generic internal error.
+    #[error("no TMDB credential is configured; set POSTER_TMDB_API_KEY")]
+    TmdbCredentialMissing,
+
+    /// TMDB rejected the configured credential.
+    #[error("TMDB rejected the configured credential")]
+    TmdbUnauthorised,
+
     /// The named preset is not in the catalogue.
     #[error("unknown preset: {0}")]
     UnknownPreset(String),
@@ -91,13 +116,22 @@ impl ApiError {
             Self::InvalidPosterPath(_) | Self::UnknownPreset(_) | Self::MalformedRequest(_) => {
                 StatusCode::BAD_REQUEST
             }
-            Self::ValidationFailed(_) | Self::SourceDimensionsExceeded { .. } => {
-                StatusCode::UNPROCESSABLE_ENTITY
-            }
+            Self::ValidationFailed(_)
+            | Self::SourceDimensionsExceeded { .. }
+            // The entry exists, so the request is well-formed; it simply
+            // cannot be satisfied, which is what 422 means.
+            | Self::NoArtworkAvailable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             // A caller who named artwork that does not exist made a client
             // error about a resource. Returning 502 would invite a retry that
             // cannot succeed.
-            Self::UnknownKey | Self::SourceNotFound => StatusCode::NOT_FOUND,
+            Self::UnknownKey | Self::SourceNotFound | Self::TmdbNotFound { .. } => {
+                StatusCode::NOT_FOUND
+            }
+            // The caller did nothing wrong and cannot fix it; a retry after
+            // the operator sets the credential will work, but not sooner.
+            Self::TmdbCredentialMissing | Self::TmdbUnauthorised => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             // The oversized payload is the upstream's, not the caller's. 413
             // would tell them to shrink a request body they did not send.
             Self::SourceTooLarge | Self::SourceDecodeFailed(_) | Self::UpstreamUnavailable(_) => {
@@ -114,6 +148,10 @@ impl ApiError {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::InvalidPosterPath(_) => "invalid_poster_path",
+            Self::TmdbNotFound { .. } => "tmdb_not_found",
+            Self::NoArtworkAvailable(_) => "no_artwork_available",
+            Self::TmdbCredentialMissing => "tmdb_credential_missing",
+            Self::TmdbUnauthorised => "tmdb_unauthorised",
             Self::UnknownPreset(_) => "unknown_preset",
             Self::ValidationFailed(_) => "validation_failed",
             Self::MalformedRequest(_) => "malformed_request",
@@ -236,6 +274,9 @@ impl From<SpecError> for ApiError {
     fn from(error: SpecError) -> Self {
         match error {
             SpecError::UnknownPreset(name) => Self::UnknownPreset(name),
+            // The title exists but offers nothing renderable, which is a fact
+            // about the catalogue rather than about the request.
+            SpecError::NoArtwork(detail) => Self::NoArtworkAvailable(detail),
             other => Self::ValidationFailed(other.to_string()),
         }
     }
@@ -256,6 +297,27 @@ impl From<FetchError> for ApiError {
             FetchError::UnexpectedStatus { .. } | FetchError::Transport(_) => {
                 Self::UpstreamUnavailable(error.to_string())
             }
+        }
+    }
+}
+
+impl From<crate::tmdb::api::MetadataError> for ApiError {
+    fn from(error: crate::tmdb::api::MetadataError) -> Self {
+        use crate::tmdb::api::MetadataError;
+        match error {
+            MetadataError::NotFound { kind, id } => Self::TmdbNotFound {
+                kind: kind.segment(),
+                id,
+            },
+            MetadataError::NoPoster { .. } => Self::NoArtworkAvailable(error.to_string()),
+            MetadataError::Unauthorised => Self::TmdbUnauthorised,
+            // Rate limiting is the one metadata failure a client should retry:
+            // it clears on its own, where the others need a different request
+            // or a different configuration.
+            MetadataError::RateLimited => Self::Overloaded,
+            MetadataError::UnexpectedStatus { .. }
+            | MetadataError::Transport(_)
+            | MetadataError::Malformed(_) => Self::UpstreamUnavailable(error.to_string()),
         }
     }
 }

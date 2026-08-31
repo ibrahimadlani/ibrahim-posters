@@ -2040,7 +2040,7 @@ checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "poster-service"
-version = "1.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2448,6 +2448,9 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

@@ -4,6 +4,8 @@
 //! exercised through `tower::ServiceExt::oneshot` against the same router
 //! `main` serves.
 
+mod support;
+
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt as _;
@@ -65,6 +67,19 @@ impl Harness {
 
     async fn with_response(response: ResponseTemplate) -> Self {
         let upstream = MockServer::start().await;
+
+        // The metadata API, which resolves an identifier to artwork paths.
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/3/(movie|tv)/\d+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(support::detail_body()))
+            .mount(&upstream)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/3/(movie|tv)/\d+/images$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(support::images_body()))
+            .mount(&upstream)
+            .await;
+
         // Logos are matched first so a request for one is not answered with
         // background artwork; the fallback below covers everything else.
         Mock::given(method("GET"))
@@ -80,6 +95,8 @@ impl Harness {
 
         let mut config = Config::defaults();
         config.tmdb_image_base = upstream.uri();
+        config.tmdb_api_base = upstream.uri();
+        config.tmdb_api_key = Some(secrecy::SecretString::from("test-key"));
         config.public_base_url = Some("https://cdn.example.test".to_owned());
 
         let state = AppState::new(config, Storage::in_memory()).expect("state builds");
@@ -129,7 +146,22 @@ impl Harness {
 }
 
 fn valid_request() -> Value {
-    json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" })
+    json!({ "tmdb_movie_id": 27205 })
+}
+
+/// Counts CDN artwork requests, ignoring metadata API calls.
+///
+/// Both are served by the same stub, but they happen at different times: a
+/// metadata call is part of a POST, an artwork fetch is part of a render.
+async fn image_fetch_count(harness: &Harness) -> usize {
+    harness
+        .upstream
+        .received_requests()
+        .await
+        .expect("recorded")
+        .iter()
+        .filter(|request| request.url.path().starts_with("/w"))
+        .count()
 }
 
 async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
@@ -201,20 +233,20 @@ async fn equivalent_requests_converge_on_one_key() {
     let (_, implicit) = harness.post(valid_request()).await;
     let (_, explicit) = harness
         .post(json!({
-            "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            "tmdb_movie_id": 27205,
             "preset": "standard",
             "overrides": { "blur_sigma": 24.0 }
         }))
         .await;
     let (_, clamped) = harness
         .post(json!({
-            "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            "tmdb_movie_id": 27205,
             "overrides": { "darken_strength": 99.0 }
         }))
         .await;
     let (_, at_cap) = harness
         .post(json!({
-            "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            "tmdb_movie_id": 27205,
             "overrides": { "darken_strength": 0.95 }
         }))
         .await;
@@ -236,23 +268,22 @@ async fn every_render_fetches_its_source_from_upstream() {
 
     for preset in ["standard", "cinematic", "minimal"] {
         let (_, created) = harness
-            .post(json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "preset": preset }))
+            .post(json!({ "tmdb_movie_id": 27205, "preset": preset }))
             .await;
         let key = created["key"].as_str().expect("key");
         let response = harness.get(&format!("/v1/posters/{key}.webp")).await;
         assert_eq!(response.status(), StatusCode::OK, "{preset} failed");
     }
 
-    let upstream_requests = harness
-        .upstream
-        .received_requests()
-        .await
-        .expect("recorded");
+    // Counted over CDN paths only: the same stub serves the metadata API, and
+    // those calls belong to the POST rather than to a render.
+    //
+    // Two fetches per render, not one: the fixture title offers a logo, so
+    // every render pulls a background and a logo.
+    let image_fetches = image_fetch_count(&harness).await;
     assert_eq!(
-        upstream_requests.len(),
-        3,
-        "expected one fetch per render, got {}",
-        upstream_requests.len()
+        image_fetches, 6,
+        "expected two artwork fetches across each of three renders, got {image_fetches}"
     );
 }
 
@@ -350,7 +381,9 @@ async fn an_invalid_poster_path_is_rejected_with_its_code() {
         "/../../etc/passwd",
         "/short.jpg",
     ] {
-        let (status, body) = harness.post(json!({ "source": source })).await;
+        let (status, body) = harness
+            .post(json!({ "tmdb_movie_id": 27205, "poster": source }))
+            .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{source} was accepted");
         assert_eq!(
             body["code"], "invalid_poster_path",
@@ -369,7 +402,7 @@ async fn an_invalid_poster_path_is_rejected_with_its_code() {
 async fn an_unknown_preset_is_reported_by_code() {
     let harness = Harness::new().await;
     let (status, body) = harness
-        .post(json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "preset": "nope" }))
+        .post(json!({ "tmdb_movie_id": 27205, "preset": "nope" }))
         .await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -385,7 +418,7 @@ async fn too_many_badges_are_rejected() {
         .collect();
 
     let (status, body) = harness
-        .post(json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "badges": badges }))
+        .post(json!({ "tmdb_movie_id": 27205, "badges": badges }))
         .await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -397,7 +430,7 @@ async fn a_bad_logo_path_is_reported_as_a_path_error() {
     let harness = Harness::new().await;
     let (status, body) = harness
         .post(json!({
-            "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            "tmdb_movie_id": 27205,
             "logo": "https://evil.test/x.png"
         }))
         .await;
@@ -433,7 +466,7 @@ async fn an_unknown_field_is_rejected_rather_than_ignored() {
     // "preset" should learn about it rather than silently get the default.
     let harness = Harness::new().await;
     let (status, body) = harness
-        .post(json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "presset": "cinematic" }))
+        .post(json!({ "tmdb_movie_id": 27205, "presset": "cinematic" }))
         .await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -537,7 +570,7 @@ async fn the_preset_catalogue_lists_every_preset() {
 async fn w2000_renders_at_the_larger_size() {
     let harness = Harness::new().await;
     let (_, created) = harness
-        .post(json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "width": "w2000" }))
+        .post(json!({ "tmdb_movie_id": 27205, "width": "w2000" }))
         .await;
     let key = created["key"].as_str().expect("key");
 
@@ -554,7 +587,7 @@ async fn badges_and_a_logo_survive_the_round_trip() {
     let harness = Harness::new().await;
     let (status, created) = harness
         .post(json!({
-            "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            "tmdb_movie_id": 27205,
             "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
             "preset": "cinematic",
             "badges": [
@@ -584,7 +617,7 @@ async fn a_logo_keeps_its_aspect_ratio_through_the_http_path() {
     let harness = Harness::new().await;
     let (_, created) = harness
         .post(json!({
-            "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            "tmdb_movie_id": 27205,
             "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"
         }))
         .await;
@@ -638,7 +671,7 @@ async fn a_logo_is_fetched_for_each_render_and_never_stored() {
     for preset in ["standard", "cinematic"] {
         let (_, created) = harness
             .post(json!({
-                "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+                "tmdb_movie_id": 27205,
                 "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
                 "preset": preset
             }))
@@ -662,4 +695,175 @@ async fn a_logo_is_fetched_for_each_render_and_never_stored() {
         logo_requests, 2,
         "expected one logo fetch per render, got {logo_requests}"
     );
+}
+
+#[tokio::test]
+async fn the_artwork_endpoint_lists_what_a_title_offers() {
+    let harness = Harness::new().await;
+    let response = harness.get("/v1/artwork/movie/27205").await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body: Value = serde_json::from_slice(&body_bytes(response).await).expect("json");
+    assert_eq!(body["kind"], "movie");
+    assert_eq!(body["id"], 27205);
+
+    // Ordered, so the first entry is what "auto" selects. That is the point of
+    // the endpoint: it makes the default visible rather than something a
+    // caller has to infer.
+    let poster = &body["posters"][0];
+    assert_eq!(poster["path"], support::POSTER);
+    assert!(poster["vote_average"].is_number());
+    assert!(poster["width"].is_number());
+    assert_eq!(body["logos"][0]["path"], support::LOGO);
+}
+
+#[tokio::test]
+async fn the_artwork_endpoint_serves_series_too() {
+    let harness = Harness::new().await;
+    let response = harness.get("/v1/artwork/tv/1396").await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body: Value = serde_json::from_slice(&body_bytes(response).await).expect("json");
+    assert_eq!(body["kind"], "tv");
+}
+
+#[tokio::test]
+async fn an_unknown_media_kind_is_rejected() {
+    let harness = Harness::new().await;
+    let response = harness.get("/v1/artwork/album/1").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body: Value = serde_json::from_slice(&body_bytes(response).await).expect("json");
+    assert_eq!(body["code"], "malformed_request");
+}
+
+#[tokio::test]
+async fn the_default_selection_matches_the_catalogue_order() {
+    // The contract the artwork endpoint implies: what it lists first is what a
+    // request with no explicit choice actually renders.
+    let harness = Harness::new().await;
+
+    let listing = harness.get("/v1/artwork/movie/27205").await;
+    let catalogue: Value = serde_json::from_slice(&body_bytes(listing).await).expect("json");
+    let expected = catalogue["logos"][0]["path"].as_str().expect("a logo");
+
+    let (_, automatic) = harness.post(json!({ "tmdb_movie_id": 27205 })).await;
+    let (_, explicit) = harness
+        .post(json!({ "tmdb_movie_id": 27205, "logo": expected }))
+        .await;
+
+    assert_eq!(
+        automatic["key"], explicit["key"],
+        "choosing the default explicitly produced a different poster"
+    );
+}
+
+#[tokio::test]
+async fn a_logo_can_be_omitted() {
+    let harness = Harness::new().await;
+    let (_, with) = harness.post(json!({ "tmdb_movie_id": 27205 })).await;
+    let (status, without) = harness
+        .post(json!({ "tmdb_movie_id": 27205, "logo": "none" }))
+        .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    assert_ne!(
+        with["key"], without["key"],
+        "omitting the logo changed nothing"
+    );
+
+    let key = without["key"].as_str().expect("key");
+    let response = harness.get(&format!("/v1/posters/{key}.webp")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Only the background is fetched when no logo is placed.
+    let logo_fetches = harness
+        .upstream
+        .received_requests()
+        .await
+        .expect("recorded")
+        .iter()
+        .filter(|request| {
+            request.url.path().starts_with("/w") && request.url.path().ends_with(".png")
+        })
+        .count();
+    assert_eq!(
+        logo_fetches, 0,
+        "a logo was fetched for a poster that omits one"
+    );
+}
+
+#[tokio::test]
+async fn artwork_the_title_does_not_offer_is_rejected() {
+    let harness = Harness::new().await;
+    let (status, body) = harness
+        .post(json!({
+            "tmdb_movie_id": 27205,
+            "poster": "/zzzzzzzzzzzzzzzzzzzzzzzzzzzz.jpg"
+        }))
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["code"], "validation_failed");
+    assert!(
+        body["detail"]
+            .as_str()
+            .expect("detail")
+            .contains("not artwork this title offers"),
+        "the detail should say the title does not offer it: {}",
+        body["detail"]
+    );
+}
+
+#[tokio::test]
+async fn naming_no_title_or_both_is_rejected() {
+    let harness = Harness::new().await;
+
+    let (status, body) = harness.post(json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["detail"]
+        .as_str()
+        .expect("detail")
+        .contains("exactly one"));
+
+    let (status, body) = harness
+        .post(json!({ "tmdb_movie_id": 27205, "tmdb_tv_id": 1396 }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["detail"]
+        .as_str()
+        .expect("detail")
+        .contains("mutually exclusive"));
+}
+
+#[tokio::test]
+async fn a_missing_credential_names_what_to_set() {
+    // A deployment fault, not a caller fault, so it gets its own code rather
+    // than a generic internal error an operator would have to go digging for.
+    let harness = Harness::new().await;
+    let mut config = Config::defaults();
+    config.tmdb_api_base = harness.upstream.uri();
+    config.tmdb_image_base = harness.upstream.uri();
+    config.tmdb_api_key = None;
+
+    let state = AppState::new(config, Storage::in_memory()).expect("state builds");
+    let response = poster_service::api::router(&state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/posters")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "tmdb_movie_id": 27205 }).to_string()))
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = serde_json::from_slice(&body_bytes(response).await).expect("json");
+    assert_eq!(body["code"], "tmdb_credential_missing");
+    assert!(body["detail"]
+        .as_str()
+        .expect("detail")
+        .contains("POSTER_TMDB_API_KEY"));
 }

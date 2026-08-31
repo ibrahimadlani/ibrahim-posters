@@ -10,7 +10,8 @@ use unicode_normalization::UnicodeNormalization as _;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 use crate::spec::clamp;
-use crate::tmdb::{PosterPath, SourceKind};
+use crate::tmdb::api::MediaKind;
+use crate::tmdb::PosterPath;
 
 /// Why a request was rejected before resolution.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -36,6 +37,15 @@ pub enum SpecError {
         /// Length actually supplied.
         found: usize,
     },
+    /// The title offers no poster this service can render.
+    #[error("{0}")]
+    NoArtwork(String),
+    /// The chosen artwork is not offered by the requested title.
+    #[error("{path} is not artwork this title offers")]
+    ArtworkNotOffered {
+        /// The path that was asked for.
+        path: String,
+    },
     /// A badge's text was empty, or became empty once control characters were
     /// removed.
     #[error("badge {index} has no renderable text")]
@@ -43,6 +53,12 @@ pub enum SpecError {
         /// Position of the offending badge in the row.
         index: usize,
     },
+    /// Neither catalogue identifier was supplied.
+    #[error("exactly one of tmdb_movie_id or tmdb_tv_id is required")]
+    NoIdentifier,
+    /// Both catalogue identifiers were supplied.
+    #[error("tmdb_movie_id and tmdb_tv_id are mutually exclusive")]
+    AmbiguousIdentifier,
 }
 
 /// Output resolution.
@@ -226,21 +242,93 @@ pub struct Overrides {
     pub badge_height: Option<u32>,
 }
 
+/// Which poster to composite on.
+///
+/// Serialised as a string: `"auto"`, or a TMDB path. The two are
+/// unambiguous because every TMDB path begins with `/`, so no escaping or
+/// tagged representation is needed to tell a mode from a selection.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum PosterChoice {
+    /// Let the service pick, using the ranking in [`crate::tmdb::api`].
+    #[default]
+    Auto,
+    /// Use this specific poster, which must be one the title offers.
+    Explicit(PosterPath),
+}
+
+/// Which logo to place, if any.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum LogoChoice {
+    /// Let the service pick, or render without one if the title has none.
+    #[default]
+    Auto,
+    /// Render no logo even if the title has one.
+    Omit,
+    /// Use this specific logo, which must be one the title offers.
+    Explicit(PosterPath),
+}
+
+impl<'de> Deserialize<'de> for PosterChoice {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        match raw.as_str() {
+            "auto" => Ok(Self::Auto),
+            path => PosterPath::parse(path)
+                .map(Self::Explicit)
+                .map_err(serde::de::Error::custom),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for LogoChoice {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        match raw.as_str() {
+            "auto" => Ok(Self::Auto),
+            "none" => Ok(Self::Omit),
+            path => PosterPath::parse(path)
+                .map(Self::Explicit)
+                .map_err(serde::de::Error::custom),
+        }
+    }
+}
+
 /// A poster generation request as it arrives on the wire.
+///
+/// Artwork is named by TMDB catalogue identifier, not by path. The service
+/// resolves the identifier to a poster and a logo itself, so a caller needs to
+/// know only which film or series they want.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PosterRequest {
-    /// TMDB path of the background artwork.
-    pub source: PosterPath,
-    /// Which TMDB image family `source` belongs to.
+    /// TMDB film identifier. Mutually exclusive with `tmdb_tv_id`.
     #[serde(default)]
-    pub source_kind: SourceKind,
+    pub tmdb_movie_id: Option<u32>,
+    /// TMDB series identifier. Mutually exclusive with `tmdb_movie_id`.
+    #[serde(default)]
+    pub tmdb_tv_id: Option<u32>,
+    /// Preferred language for the title logo, as an ISO 639-1 code.
+    ///
+    /// Logos are language-specific on TMDB. A title with no logo in the
+    /// requested language falls back to a language-neutral one, then to any
+    /// other, rather than rendering without one.
+    #[serde(default = "default_language")]
+    pub language: String,
+    /// Which poster to composite on.
+    ///
+    /// Defaults to the service's ranking. Send a path from
+    /// `GET /v1/artwork/{kind}/{id}` to choose a different one.
+    #[serde(default)]
+    pub poster: PosterChoice,
+    /// Which logo to place.
+    ///
+    /// Defaults to the service's ranking, `"none"` to render without one, or
+    /// a path from the same catalogue endpoint.
+    #[serde(default)]
+    pub logo: LogoChoice,
     /// Named layout preset.
     #[serde(default = "default_preset_name")]
     pub preset: String,
-    /// Optional title logo, also addressed by TMDB path.
-    #[serde(default)]
-    pub logo: Option<PosterPath>,
     /// Badges rendered along the top edge, left to right.
     #[serde(default)]
     pub badges: Vec<Badge>,
@@ -250,6 +338,46 @@ pub struct PosterRequest {
     /// Per-request deviations from the preset.
     #[serde(default)]
     pub overrides: Overrides,
+}
+
+/// Language used when a request does not choose one.
+fn default_language() -> String {
+    "en".to_owned()
+}
+
+impl PosterRequest {
+    /// Returns which catalogue entry this request names.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::NoIdentifier`] if neither identifier is present, and
+    /// [`SpecError::AmbiguousIdentifier`] if both are. Requiring exactly one
+    /// rather than preferring a winner means a caller who sends both learns
+    /// they were confused instead of silently getting whichever the
+    /// implementation happened to check first.
+    pub fn target(&self) -> Result<(MediaKind, u32), SpecError> {
+        match (self.tmdb_movie_id, self.tmdb_tv_id) {
+            (Some(id), None) => Ok((MediaKind::Movie, id)),
+            (None, Some(id)) => Ok((MediaKind::Tv, id)),
+            (None, None) => Err(SpecError::NoIdentifier),
+            (Some(_), Some(_)) => Err(SpecError::AmbiguousIdentifier),
+        }
+    }
+
+    /// Returns the requested logo language, normalised.
+    ///
+    /// Lowercased and truncated to the two-letter ISO 639-1 form TMDB uses, so
+    /// `EN`, `en` and `en-GB` all address the same artwork rather than
+    /// producing three cache keys for one poster.
+    #[must_use]
+    pub fn normalised_language(&self) -> String {
+        self.language
+            .chars()
+            .take_while(char::is_ascii_alphabetic)
+            .take(2)
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
 }
 
 /// Name of the preset applied when a request does not choose one.

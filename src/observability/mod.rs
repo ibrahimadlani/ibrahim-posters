@@ -25,6 +25,8 @@ pub const RENDER_DURATION: &str = "poster_render_duration_seconds";
 /// cost profiles, and a single series would average them into a number that
 /// describes neither.
 pub const UPSTREAM_DURATION: &str = "poster_upstream_duration_seconds";
+/// Time spent resolving a catalogue identifier to artwork, by media kind.
+pub const METADATA_DURATION: &str = "poster_metadata_duration_seconds";
 /// Requests rejected because no render slot became free in time.
 pub const ADMISSION_REJECTED: &str = "poster_admission_rejected_total";
 /// Time spent waiting for a render slot.
@@ -82,6 +84,11 @@ pub fn describe() {
         UPSTREAM_DURATION,
         Unit::Seconds,
         "Time spent fetching artwork from upstream"
+    );
+    describe_histogram!(
+        METADATA_DURATION,
+        Unit::Seconds,
+        "Time spent resolving a TMDB identifier to artwork, by media kind"
     );
     describe_counter!(
         ADMISSION_REJECTED,
@@ -162,6 +169,7 @@ mod tests {
             CACHE_LOOKUPS,
             RENDER_DURATION,
             UPSTREAM_DURATION,
+            METADATA_DURATION,
             ADMISSION_REJECTED,
             ADMISSION_WAIT,
             SINGLEFLIGHT_COLLAPSED,
@@ -216,6 +224,7 @@ mod tests {
             CACHE_LOOKUPS,
             RENDER_DURATION,
             UPSTREAM_DURATION,
+            METADATA_DURATION,
             ADMISSION_REJECTED,
             ADMISSION_WAIT,
             SINGLEFLIGHT_COLLAPSED,

@@ -5,9 +5,12 @@
 //! canonical encoding is injective.
 
 use poster_service::spec::key::canonical_encoding;
-use poster_service::spec::request::{Badge, BadgeStyle, OutputWidth, Overrides, PosterRequest};
+use poster_service::spec::request::{
+    Badge, BadgeStyle, LogoChoice, OutputWidth, Overrides, PosterChoice, PosterRequest,
+};
 use poster_service::spec::{clamp, preset};
-use poster_service::tmdb::{PosterPath, SourceKind};
+use poster_service::tmdb::api::{ArtworkOption, Catalogue, MediaKind};
+use poster_service::tmdb::PosterPath;
 use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
 
@@ -59,25 +62,56 @@ fn any_overrides() -> impl Strategy<Value = Overrides> {
         })
 }
 
-fn any_request() -> impl Strategy<Value = PosterRequest> {
+/// Generates a request paired with a catalogue that satisfies it.
+///
+/// The two are generated together because a request naming artwork the
+/// catalogue does not offer is rejected by design, and a generator that
+/// produced such pairs would spend its time exploring the rejection path
+/// rather than the resolution logic these properties are about.
+fn any_request_and_catalogue() -> impl Strategy<Value = (PosterRequest, Catalogue)> {
     (
         any_poster_path(),
-        proptest::option::of(any_poster_path()),
+        any_poster_path(),
         prop::collection::vec(any_badge(), 0..=clamp::MAX_BADGES),
         prop_oneof![Just(OutputWidth::W1000), Just(OutputWidth::W2000)],
-        prop_oneof![Just(SourceKind::Poster), Just(SourceKind::Backdrop)],
+        prop_oneof![Just(MediaKind::Movie), Just(MediaKind::Tv)],
         prop::sample::select(vec!["standard", "cinematic", "minimal", "poster_wall"]),
         any_overrides(),
+        any::<u32>(),
+        prop_oneof![Just(true), Just(false)],
     )
         .prop_map(
-            |(source, logo, badges, width, source_kind, preset, overrides)| PosterRequest {
-                source,
-                source_kind,
-                preset: preset.to_owned(),
-                logo,
-                badges,
-                width,
-                overrides,
+            |(poster, logo, badges, width, kind, preset, overrides, id, omit_logo)| {
+                let option = |path: &PosterPath| ArtworkOption {
+                    path: path.clone(),
+                    language: Some("en".to_owned()),
+                    vote_average: 5.0,
+                    vote_count: 1,
+                    width: 2000,
+                    height: 3000,
+                };
+                let catalogue = Catalogue {
+                    kind,
+                    id,
+                    posters: vec![option(&poster)],
+                    logos: vec![option(&logo)],
+                };
+                let request = PosterRequest {
+                    tmdb_movie_id: matches!(kind, MediaKind::Movie).then_some(id),
+                    tmdb_tv_id: matches!(kind, MediaKind::Tv).then_some(id),
+                    language: "en".to_owned(),
+                    poster: PosterChoice::Auto,
+                    logo: if omit_logo {
+                        LogoChoice::Omit
+                    } else {
+                        LogoChoice::Auto
+                    },
+                    preset: preset.to_owned(),
+                    badges,
+                    width,
+                    overrides,
+                };
+                (request, catalogue)
             },
         )
 }
@@ -96,15 +130,33 @@ proptest! {
 
     /// Resolution is total over every request that passes validation.
     #[test]
-    fn resolution_never_panics(request in any_request()) {
-        let _ = preset::resolve(&request);
+    fn resolution_never_panics((request, catalogue) in any_request_and_catalogue()) {
+        let _ = preset::resolve(&request, &catalogue);
+    }
+
+    /// Exactly one identifier is required, and both is an error.
+    #[test]
+    fn identifier_selection_is_unambiguous(
+        (request, _catalogue) in any_request_and_catalogue(),
+    ) {
+        prop_assert!(request.target().is_ok(), "a generated request named no title");
+
+        let mut both = request.clone();
+        both.tmdb_movie_id = Some(1);
+        both.tmdb_tv_id = Some(2);
+        prop_assert!(both.target().is_err(), "naming both was accepted");
+
+        let mut neither = both;
+        neither.tmdb_movie_id = None;
+        neither.tmdb_tv_id = None;
+        prop_assert!(neither.target().is_err(), "naming neither was accepted");
     }
 
     /// Every resolved field lands inside its documented range, whatever the
     /// override asked for.
     #[test]
-    fn resolution_respects_every_clamp(request in any_request()) {
-        let spec = preset::resolve(&request).expect("generated requests are valid");
+    fn resolution_respects_every_clamp((request, catalogue) in any_request_and_catalogue()) {
+        let spec = preset::resolve(&request, &catalogue).expect("generated requests are valid");
         let scale = request.width.scale();
 
         prop_assert!(clamp::BLUR_BAND_FRACTION.contains(&spec.blur_band_fraction));
@@ -143,9 +195,9 @@ proptest! {
     /// Resolution is deterministic: the same request always resolves the same
     /// way, and therefore always produces the same key.
     #[test]
-    fn resolution_is_deterministic(request in any_request()) {
-        let first = preset::resolve(&request).expect("valid");
-        let second = preset::resolve(&request).expect("valid");
+    fn resolution_is_deterministic((request, catalogue) in any_request_and_catalogue()) {
+        let first = preset::resolve(&request, &catalogue).expect("valid");
+        let second = preset::resolve(&request, &catalogue).expect("valid");
         prop_assert_eq!(first.cache_key(), second.cache_key());
     }
 
@@ -154,9 +206,9 @@ proptest! {
     /// The direction that makes the cache hit rate reachable: two requests
     /// that resolve to the same thing must never occupy two cache entries.
     #[test]
-    fn equal_specs_produce_equal_keys(a in any_request(), b in any_request()) {
-        let spec_a = preset::resolve(&a).expect("valid");
-        let spec_b = preset::resolve(&b).expect("valid");
+    fn equal_specs_produce_equal_keys((a, cat_a) in any_request_and_catalogue(), (b, cat_b) in any_request_and_catalogue()) {
+        let spec_a = preset::resolve(&a, &cat_a).expect("valid");
+        let spec_b = preset::resolve(&b, &cat_b).expect("valid");
 
         if spec_a == spec_b {
             prop_assert_eq!(spec_a.cache_key(), spec_b.cache_key());
@@ -173,9 +225,9 @@ proptest! {
     /// encoding, or a missing length prefix that lets two inputs share a
     /// representation. Collision resistance then follows from blake3.
     #[test]
-    fn canonical_encoding_is_injective(a in any_request(), b in any_request()) {
-        let spec_a = preset::resolve(&a).expect("valid");
-        let spec_b = preset::resolve(&b).expect("valid");
+    fn canonical_encoding_is_injective((a, cat_a) in any_request_and_catalogue(), (b, cat_b) in any_request_and_catalogue()) {
+        let spec_a = preset::resolve(&a, &cat_a).expect("valid");
+        let spec_b = preset::resolve(&b, &cat_b).expect("valid");
 
         prop_assert_eq!(
             spec_a == spec_b,
@@ -192,14 +244,16 @@ proptest! {
     /// that differ only in that field.
     #[test]
     fn changing_the_source_changes_the_key(
-        request in any_request(),
+        (request, catalogue) in any_request_and_catalogue(),
         other in any_poster_path(),
     ) {
-        let original = preset::resolve(&request).expect("valid");
+        let original = preset::resolve(&request, &catalogue).expect("valid");
 
-        let mut mutated = request;
-        mutated.source = other;
-        let changed = preset::resolve(&mutated).expect("valid");
+        // The poster now comes from the catalogue rather than the request, so
+        // the field to vary is the catalogue's.
+        let mut mutated = catalogue;
+        mutated.posters[0].path = other;
+        let changed = preset::resolve(&request, &mutated).expect("valid");
 
         if original.source != changed.source {
             prop_assert_ne!(original.cache_key(), changed.cache_key());

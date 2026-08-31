@@ -132,9 +132,24 @@ impl std::fmt::Display for CacheKey {
 ///
 /// ```
 /// use poster_service::spec::{key, preset, request::PosterRequest};
+/// use poster_service::tmdb::api::{ArtworkOption, Catalogue, MediaKind};
+/// use poster_service::tmdb::PosterPath;
 ///
-/// let json = r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#;
-/// let spec = preset::resolve(&serde_json::from_str::<PosterRequest>(json)?)?;
+/// let request: PosterRequest = serde_json::from_str(r#"{ "tmdb_movie_id": 27205 }"#)?;
+/// let catalogue = Catalogue {
+///     kind: MediaKind::Movie,
+///     id: 27205,
+///     posters: vec![ArtworkOption {
+///         path: PosterPath::parse("/kqjL17yufvn9OVLyXYpvtyrFfak.jpg")?,
+///         language: Some("en".to_owned()),
+///         vote_average: 8.0,
+///         vote_count: 100,
+///         width: 2000,
+///         height: 3000,
+///     }],
+///     logos: Vec::new(),
+/// };
+/// let spec = preset::resolve(&request, &catalogue)?;
 ///
 /// assert_eq!(key::canonical_encoding(&spec), key::canonical_encoding(&spec));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -147,7 +162,6 @@ pub fn canonical_encoding(spec: &ResolvedSpec) -> Vec<u8> {
     let mut out = Vec::with_capacity(256);
 
     push_str(&mut out, spec.source.as_str());
-    out.push(spec.source_kind.key_tag());
 
     // The tag distinguishes absent from present-and-empty. A bare
     // length-prefixed string would encode None and Some("") identically.
@@ -211,14 +225,39 @@ mod tests {
     use super::*;
     use crate::spec::preset;
     use crate::spec::request::PosterRequest;
+    use crate::tmdb::api::Catalogue;
+    use crate::tmdb::PosterPath;
+
+    /// A catalogue standing in for a resolved lookup.
+    fn artwork(logo: Option<&str>) -> Catalogue {
+        use crate::tmdb::api::{ArtworkOption, MediaKind};
+        let option = |path: &str| ArtworkOption {
+            path: PosterPath::parse(path).expect("valid"),
+            language: Some("en".to_owned()),
+            vote_average: 5.0,
+            vote_count: 10,
+            width: 2000,
+            height: 3000,
+        };
+        Catalogue {
+            kind: MediaKind::Movie,
+            id: 27205,
+            posters: vec![option("/kqjL17yufvn9OVLyXYpvtyrFfak.jpg")],
+            logos: logo.map(option).into_iter().collect(),
+        }
+    }
+
+    fn spec_with(json: &str, catalogue: &Catalogue) -> ResolvedSpec {
+        let request: PosterRequest = serde_json::from_str(json).expect("valid request");
+        preset::resolve(&request, catalogue).expect("resolves")
+    }
 
     fn spec_from(json: &str) -> ResolvedSpec {
-        let request: PosterRequest = serde_json::from_str(json).expect("valid request");
-        preset::resolve(&request).expect("resolves")
+        spec_with(json, &artwork(None))
     }
 
     fn base() -> ResolvedSpec {
-        spec_from(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#)
+        spec_from(r#"{ "tmdb_movie_id": 27205 }"#)
     }
 
     #[test]
@@ -243,9 +282,9 @@ mod tests {
     #[test]
     fn absent_logo_differs_from_present_logo() {
         let without = base();
-        let with = spec_from(
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
-                 "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png" }"#,
+        let with = spec_with(
+            r#"{ "tmdb_movie_id": 27205 }"#,
+            &artwork(Some("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png")),
         );
         assert_ne!(without.cache_key(), with.cache_key());
     }
@@ -255,11 +294,11 @@ mod tests {
         // The case length prefixes exist for: without them these two encode
         // identically and collide onto one cache entry.
         let ab_c = spec_from(
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r#"{ "tmdb_movie_id": 27205,
                  "badges": [{ "text": "ab" }, { "text": "c" }] }"#,
         );
         let a_bc = spec_from(
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r#"{ "tmdb_movie_id": 27205,
                  "badges": [{ "text": "a" }, { "text": "bc" }] }"#,
         );
         assert_ne!(canonical_encoding(&ab_c), canonical_encoding(&a_bc));
@@ -269,11 +308,11 @@ mod tests {
     #[test]
     fn badge_order_is_significant() {
         let forward = spec_from(
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r#"{ "tmdb_movie_id": 27205,
                  "badges": [{ "text": "a" }, { "text": "b" }] }"#,
         );
         let reverse = spec_from(
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r#"{ "tmdb_movie_id": 27205,
                  "badges": [{ "text": "b" }, { "text": "a" }] }"#,
         );
         assert_ne!(forward.cache_key(), reverse.cache_key());
@@ -285,16 +324,16 @@ mod tests {
         // it, must not produce extra cache entries.
         let implicit = base();
         let explicit = spec_from(
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r#"{ "tmdb_movie_id": 27205,
                  "preset": "standard",
                  "overrides": { "blur_sigma": 24.0 } }"#,
         );
         let clamped = spec_from(
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r#"{ "tmdb_movie_id": 27205,
                  "overrides": { "darken_strength": 99.0 } }"#,
         );
         let at_cap = spec_from(
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r#"{ "tmdb_movie_id": 27205,
                  "overrides": { "darken_strength": 0.95 } }"#,
         );
 
@@ -305,11 +344,11 @@ mod tests {
     #[test]
     fn negative_zero_does_not_fork_the_key() {
         let positive = spec_from(
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r#"{ "tmdb_movie_id": 27205,
                  "overrides": { "blur_sigma": 0.0 } }"#,
         );
         let negative = spec_from(
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r#"{ "tmdb_movie_id": 27205,
                  "overrides": { "blur_sigma": -0.0 } }"#,
         );
         assert_eq!(positive, negative);
@@ -319,8 +358,7 @@ mod tests {
     #[test]
     fn width_changes_the_key() {
         let small = base();
-        let large =
-            spec_from(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "width": "w2000" }"#);
+        let large = spec_from(r#"{ "tmdb_movie_id": 27205, "width": "w2000" }"#);
         assert_ne!(small.cache_key(), large.cache_key());
     }
 

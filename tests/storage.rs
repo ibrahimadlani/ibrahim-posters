@@ -3,6 +3,8 @@
 //! No containers and no credentials: `object_store`'s `InMemory` backend is
 //! the reason ADR 0003 chose that crate over `aws-sdk-s3`.
 
+mod support;
+
 use poster_service::spec::{preset, request::PosterRequest, CacheKey};
 use poster_service::storage::{keys, Storage, StorageError};
 
@@ -35,11 +37,11 @@ async fn plant(backend: &Arc<InMemory>, path: &str, bytes: Vec<u8>) {
 
 fn spec(json: &str) -> poster_service::spec::ResolvedSpec {
     let request: PosterRequest = serde_json::from_str(json).expect("valid request");
-    preset::resolve(&request).expect("resolves")
+    preset::resolve(&request, &support::catalogue()).expect("resolves")
 }
 
 fn standard() -> poster_service::spec::ResolvedSpec {
-    spec(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#)
+    spec(r#"{ "tmdb_movie_id": 27205 }"#)
 }
 
 #[tokio::test]
@@ -83,7 +85,7 @@ async fn every_preset_round_trips() {
 
     for name in ["standard", "cinematic", "minimal", "poster_wall"] {
         let original = spec(&format!(
-            r#"{{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "preset": "{name}" }}"#
+            r#"{{ "tmdb_movie_id": 27205, "preset": "{name}" }}"#
         ));
         let key = storage.put_spec(&original).await.expect("write succeeds");
         let loaded = storage
@@ -179,7 +181,6 @@ async fn an_out_of_range_stored_specification_is_rejected() {
 
     let tampered = serde_json::json!({
         "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
-        "source_kind": "poster",
         "logo": null,
         "badges": [],
         "width": "w1000",
@@ -250,7 +251,7 @@ async fn distinct_specifications_do_not_share_storage() {
     let storage = Storage::in_memory();
 
     let a = standard();
-    let b = spec(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "preset": "minimal" }"#);
+    let b = spec(r#"{ "tmdb_movie_id": 27205, "preset": "minimal" }"#);
 
     let key_a = storage.put_spec(&a).await.expect("write succeeds");
     let key_b = storage.put_spec(&b).await.expect("write succeeds");

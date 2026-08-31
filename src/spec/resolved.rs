@@ -6,7 +6,7 @@ use crate::spec::clamp;
 
 use crate::spec::key::CacheKey;
 use crate::spec::request::{Badge, OutputWidth};
-use crate::tmdb::{PosterPath, SourceKind};
+use crate::tmdb::PosterPath;
 
 /// A fully resolved, clamped, canonical render specification.
 ///
@@ -40,10 +40,8 @@ use crate::tmdb::{PosterPath, SourceKind};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResolvedSpec {
-    /// Background artwork.
+    /// Background artwork, as resolved from a TMDB catalogue identifier.
     pub source: PosterPath,
-    /// Which TMDB image family the background belongs to.
-    pub source_kind: SourceKind,
     /// Optional title logo.
     pub logo: Option<PosterPath>,
     /// Badges along the top edge, left to right.
@@ -78,10 +76,26 @@ impl ResolvedSpec {
     ///
     /// ```
     /// use poster_service::spec::{preset, request::PosterRequest};
+    /// use poster_service::tmdb::api::{ArtworkOption, Catalogue, MediaKind};
+    /// use poster_service::tmdb::PosterPath;
     ///
-    /// let json = r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#;
-    /// let request: PosterRequest = serde_json::from_str(json)?;
-    /// let spec = preset::resolve(&request)?;
+    /// let request: PosterRequest = serde_json::from_str(r#"{ "tmdb_movie_id": 27205 }"#)?;
+    ///
+    /// // Standing in for what a TMDB lookup would return.
+    /// let catalogue = Catalogue {
+    ///     kind: MediaKind::Movie,
+    ///     id: 27205,
+    ///     posters: vec![ArtworkOption {
+    ///         path: PosterPath::parse("/kqjL17yufvn9OVLyXYpvtyrFfak.jpg")?,
+    ///         language: Some("en".to_owned()),
+    ///         vote_average: 8.0,
+    ///         vote_count: 100,
+    ///         width: 2000,
+    ///         height: 3000,
+    ///     }],
+    ///     logos: Vec::new(),
+    /// };
+    /// let spec = preset::resolve(&request, &catalogue)?;
     ///
     /// // The key is stable: the same specification always yields the same key.
     /// assert_eq!(spec.cache_key(), spec.cache_key());
@@ -173,14 +187,27 @@ mod tests {
 
     fn resolve(json: &str) -> super::ResolvedSpec {
         let request: PosterRequest = serde_json::from_str(json).expect("valid");
-        preset::resolve(&request).expect("resolves")
+        let catalogue = crate::tmdb::api::Catalogue {
+            kind: crate::tmdb::api::MediaKind::Movie,
+            id: 27205,
+            posters: vec![crate::tmdb::api::ArtworkOption {
+                path: crate::tmdb::PosterPath::parse("/kqjL17yufvn9OVLyXYpvtyrFfak.jpg")
+                    .expect("valid"),
+                language: Some("en".to_owned()),
+                vote_average: 5.0,
+                vote_count: 10,
+                width: 2000,
+                height: 3000,
+            }],
+            logos: Vec::new(),
+        };
+        preset::resolve(&request, &catalogue).expect("resolves")
     }
 
     #[test]
     fn dimensions_follow_the_requested_width() {
-        let small = resolve(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
-        let large =
-            resolve(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "width": "w2000" }"#);
+        let small = resolve(r#"{ "tmdb_movie_id": 27205 }"#);
+        let large = resolve(r#"{ "tmdb_movie_id": 27205, "width": "w2000" }"#);
 
         assert_eq!(small.dimensions(), (1000, 1500));
         assert_eq!(large.dimensions(), (2000, 3000));
@@ -193,8 +220,8 @@ mod tests {
         // it truncates -- but a band of zero rows would make the blur stage a
         // silent no-op, which is worth catching here rather than visually.
         for json in [
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#,
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "width": "w2000" }"#,
+            r#"{ "tmdb_movie_id": 27205 }"#,
+            r#"{ "tmdb_movie_id": 27205, "width": "w2000" }"#,
         ] {
             let spec = resolve(json);
             let (_, height) = spec.dimensions();

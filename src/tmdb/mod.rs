@@ -14,6 +14,7 @@
 //! because filters lose to DNS rebinding, IPv6-mapped addresses, redirect
 //! chains and decimal IP encodings, and a constant host loses to none of them.
 
+pub mod api;
 pub mod fetch;
 pub mod probe;
 
@@ -43,37 +44,6 @@ pub enum InvalidPosterPath {
     /// The extension was missing or unrecognised.
     #[error("path must end in .jpg, .png or .webp")]
     UnsupportedExtension,
-}
-
-/// Which TMDB image family a path belongs to.
-///
-/// TMDB serves posters and backdrops from the same host under the same size
-/// prefixes, but at different aspect ratios. The renderer needs to know which
-/// it received in order to decide how to fit the artwork.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceKind {
-    /// 2:3 portrait artwork. The default, and the common case.
-    #[default]
-    Poster,
-    /// 16:9 landscape artwork, cropped to fit.
-    Backdrop,
-}
-
-impl SourceKind {
-    /// Returns the stable byte used to represent this variant in a cache key.
-    ///
-    /// Written out rather than derived from the enum's discriminant: a derived
-    /// value would silently change if a variant were ever inserted above
-    /// another, and that would orphan every cache key without any visible
-    /// cause. See [`crate::spec::key`].
-    #[must_use]
-    pub const fn key_tag(self) -> u8 {
-        match self {
-            Self::Poster => 0,
-            Self::Backdrop => 1,
-        }
-    }
 }
 
 /// A validated TMDB image path, for example `/kqjL17yufvn9OVLyXYpvtyrFfak.jpg`.
@@ -388,13 +358,5 @@ mod tests {
         assert_eq!(TmdbSize::W780.as_str(), "w780");
         assert_eq!(TmdbSize::W1280.as_str(), "w1280");
         assert_eq!(TmdbSize::Original.as_str(), "original");
-    }
-
-    #[test]
-    fn key_tags_are_stable() {
-        // Derived discriminants would shift if a variant were inserted above
-        // another, orphaning every cache key with no visible cause.
-        assert_eq!(SourceKind::Poster.key_tag(), 0);
-        assert_eq!(SourceKind::Backdrop.key_tag(), 1);
     }
 }

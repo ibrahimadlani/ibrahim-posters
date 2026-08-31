@@ -47,6 +47,8 @@
 //!
 //! Regenerate with: `VISUAL_UPDATE=1 cargo test --test visual_regression`
 
+mod support;
+
 use std::path::{Path, PathBuf};
 
 use poster_service::render::{self, source::Rgba8};
@@ -138,7 +140,7 @@ fn logo(width: u32, height: u32) -> Vec<u8> {
 
 fn spec_from(json: &str) -> ResolvedSpec {
     let request: PosterRequest = serde_json::from_str(json).expect("valid request");
-    preset::resolve(&request).expect("resolves")
+    preset::resolve(&request, &support::catalogue()).expect("resolves")
 }
 
 /// Renders one case and compares it against its reference.
@@ -270,18 +272,14 @@ fn compare(reference: &image::RgbaImage, rendered: &[u8]) -> Difference {
 
 #[test]
 fn standard_preset_without_extras() {
-    check(
-        "standard-bare",
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#,
-        false,
-    );
+    check("standard-bare", r#"{ "tmdb_movie_id": 27205 }"#, false);
 }
 
 #[test]
 fn standard_preset_with_logo_and_badges() {
     check(
         "standard-full",
-        r##"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r##"{ "tmdb_movie_id": 27205,
               "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
               "badges": [
                 { "text": "#17 IMDb", "style": "accent" },
@@ -296,7 +294,7 @@ fn standard_preset_with_logo_and_badges() {
 fn cinematic_preset() {
     check(
         "cinematic",
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "preset": "cinematic" }"#,
+        r#"{ "tmdb_movie_id": 27205, "preset": "cinematic" }"#,
         true,
     );
 }
@@ -305,7 +303,7 @@ fn cinematic_preset() {
 fn minimal_preset() {
     check(
         "minimal",
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "preset": "minimal" }"#,
+        r#"{ "tmdb_movie_id": 27205, "preset": "minimal" }"#,
         true,
     );
 }
@@ -314,7 +312,7 @@ fn minimal_preset() {
 fn poster_wall_preset() {
     check(
         "poster-wall",
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "preset": "poster_wall" }"#,
+        r#"{ "tmdb_movie_id": 27205, "preset": "poster_wall" }"#,
         true,
     );
 }
@@ -325,7 +323,7 @@ fn overrides_are_visible_in_the_output() {
     // consults them -- which every unit test in spec/ would still pass.
     check(
         "overrides",
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r#"{ "tmdb_movie_id": 27205,
              "overrides": { "blur_band_fraction": 0.55, "blur_sigma": 60.0,
                             "darken_strength": 0.9, "logo_width_fraction": 0.85 } }"#,
         true,
@@ -336,7 +334,7 @@ fn overrides_are_visible_in_the_output() {
 fn w2000_output() {
     check(
         "w2000",
-        r##"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r##"{ "tmdb_movie_id": 27205,
               "width": "w2000",
               "badges": [{ "text": "#17 IMDb", "style": "accent" }] }"##,
         true,

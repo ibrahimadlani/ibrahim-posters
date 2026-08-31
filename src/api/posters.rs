@@ -23,39 +23,91 @@ use crate::render::{self, source};
 use crate::spec::{preset, CacheKey, OutputWidth, PosterRequest, ResolvedSpec};
 use crate::state::AppState;
 use crate::storage::{keys, Storage};
-use crate::tmdb::{fetch, PosterPath, TmdbSize};
+use crate::tmdb::{api, fetch, PosterPath, TmdbSize};
+use secrecy::ExposeSecret as _;
 
-/// Parses and validates a request body.
+/// Lists the artwork a catalogue identifier offers.
+///
+/// # Errors
+///
+/// [`ApiError::TmdbNotFound`] if the identifier is not in the catalogue,
+/// [`ApiError::NoArtworkAvailable`] if it has no usable poster, and the
+/// upstream variants for anything else.
+pub(crate) async fn fetch_catalogue(
+    state: &AppState,
+    kind: api::MediaKind,
+    id: u32,
+    language: &str,
+) -> Result<api::Catalogue, ApiError> {
+    let secret = state
+        .config
+        .tmdb_api_key
+        .as_ref()
+        .ok_or(ApiError::TmdbCredentialMissing)?;
+
+    let started = std::time::Instant::now();
+    let catalogue = api::catalogue(
+        &state.http,
+        &state.config.tmdb_api_base,
+        secret.expose_secret(),
+        kind,
+        id,
+        language,
+    )
+    .await;
+    metrics::histogram!(observability::METADATA_DURATION, "kind" => kind.segment())
+        .record(started.elapsed().as_secs_f64());
+
+    catalogue.map_err(|error| match error {
+        // The API layer knows what was asked for; the client module only knows
+        // it got a 404, so the specific error is built here.
+        api::MetadataError::UnexpectedStatus { status } if status == StatusCode::NOT_FOUND => {
+            ApiError::TmdbNotFound {
+                kind: kind.segment(),
+                id,
+            }
+        }
+        other => other.into(),
+    })
+}
+
+/// Parses a request body.
 ///
 /// Deserialisation is attempted directly and only re-examined on failure, so
 /// the happy path pays for one parse.
 ///
-/// The re-examination exists because `PosterPath` validates inside its
-/// `Deserialize`, which means a bad path arrives as a generic serde error
-/// indistinguishable from a misspelled field. Both would report
-/// `malformed_request`, and `invalid_poster_path` — a code the API contract
-/// promises and clients branch on — would never be reachable. Checking the
-/// path fields explicitly on the error path restores the distinction without
-/// duplicating the request type or costing anything when the body is valid.
+/// The re-examination exists because `PosterChoice` and `LogoChoice` validate
+/// paths inside their `Deserialize`, so a malformed path arrives as a serde
+/// error indistinguishable from a misspelled field. Both would report
+/// `malformed_request`, and `invalid_poster_path` -- a code the API contract
+/// promises and clients branch on -- would be unreachable.
+///
+/// This is the second time that has happened: it was true of the `source`
+/// field before v2 moved artwork selection into these types, and moving the
+/// validation moved the problem with it. The mode keywords are skipped
+/// explicitly, since `"auto"` and `"none"` are not paths and reporting a path
+/// error for them would be wrong.
 fn parse_request(body: &[u8]) -> Result<PosterRequest, ApiError> {
-    match serde_json::from_slice::<PosterRequest>(body) {
-        Ok(request) => Ok(request),
-        Err(error) => {
-            // Re-parse loosely to tell "the path is wrong" apart from "the
-            // body is wrong". A body that will not parse as JSON at all is
-            // neither, and falls through to the original error.
-            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
-                for field in ["source", "logo"] {
-                    if let Some(candidate) = value.get(field).and_then(serde_json::Value::as_str) {
-                        if let Err(invalid) = PosterPath::parse(candidate) {
-                            return Err(ApiError::InvalidPosterPath(invalid));
-                        }
-                    }
-                }
+    let error = match serde_json::from_slice::<PosterRequest>(body) {
+        Ok(request) => return Ok(request),
+        Err(error) => error,
+    };
+
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+        for field in ["poster", "logo"] {
+            let Some(candidate) = value.get(field).and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            if matches!(candidate, "auto" | "none") {
+                continue;
             }
-            Err(ApiError::MalformedRequest(error.to_string()))
+            if let Err(invalid) = PosterPath::parse(candidate) {
+                return Err(ApiError::InvalidPosterPath(invalid));
+            }
         }
     }
+
+    Err(ApiError::MalformedRequest(error.to_string()))
 }
 
 /// Response to a successful `POST /v1/posters`.
@@ -87,8 +139,17 @@ pub async fn create(
     body: axum::body::Bytes,
 ) -> Result<(StatusCode, Json<Created>), ApiError> {
     let request = parse_request(&body)?;
+    let (kind, id) = request.target()?;
 
-    let spec = preset::resolve(&request)?;
+    // Resolved here rather than at render time. A rendered poster is served
+    // with a one-year immutable directive keyed on its specification, so if
+    // the identifier were resolved during a render the same key would produce
+    // different artwork whenever TMDB promoted a different poster. Putting the
+    // resolved paths in the specification makes the key cover the artwork
+    // actually used.
+    let catalogue = fetch_catalogue(&state, kind, id, &request.normalised_language()).await?;
+
+    let spec = preset::resolve(&request, &catalogue)?;
     let key = state.storage.put_spec(&spec).await?;
 
     Ok((

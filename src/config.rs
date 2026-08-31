@@ -118,18 +118,32 @@ pub struct Config {
     /// the AWS-conventional variables.
     pub s3_region: Option<String>,
 
-    /// TMDB CDN base. The only host the service ever contacts.
-    #[serde(default = "default_tmdb_base")]
+    /// TMDB CDN base, where artwork is fetched from.
+    #[serde(default = "default_tmdb_image_base")]
     pub tmdb_image_base: String,
 
-    /// TMDB API key.
+    /// TMDB API base, where catalogue identifiers are resolved to artwork.
     ///
-    /// **Not required.** Clients supply `poster_path` directly and
-    /// `image.tmdb.org` serves artwork unauthenticated. This exists only for a
-    /// future endpoint that resolves a TMDB *id* to a path, which v1 does not
-    /// do. It is declared so the omission is visibly deliberate: a service
-    /// that needs no credential to fetch its primary input is a meaningfully
-    /// smaller thing to operate.
+    /// A second host, and the only other one the service contacts. Both are
+    /// configured bases with paths built from typed values, so no caller input
+    /// reaches a URL except as a number.
+    #[serde(default = "default_tmdb_api_base")]
+    pub tmdb_api_base: String,
+
+    /// TMDB API key or read access token.
+    ///
+    /// **Required from v2.** Callers name artwork by catalogue identifier, and
+    /// resolving one to a poster and a logo is an authenticated API call.
+    /// Earlier versions took artwork paths directly and needed no credential.
+    ///
+    /// Accepts either a v3 API key or a v4 read access token; the scheme is
+    /// inferred from the credential's shape, so an operator pastes whichever
+    /// their TMDB account page gave them.
+    ///
+    /// Modelled as an `Option` rather than a required field so that a missing
+    /// credential fails on the first request that needs one, with an error
+    /// naming what to set, rather than preventing the process from starting at
+    /// all — health checks and the preset catalogue work without it.
     pub tmdb_api_key: Option<SecretString>,
 
     /// Public origin used to build the URL returned by `POST /v1/posters`.
@@ -149,6 +163,10 @@ pub struct Config {
     /// Total upstream request timeout, in milliseconds.
     #[serde(default = "default_upstream_timeout_ms")]
     pub upstream_timeout_ms: u64,
+
+    /// Preferred logo language when a request does not name one.
+    #[serde(default = "default_language")]
+    pub default_language: String,
 
     /// Concurrent renders permitted.
     ///
@@ -171,8 +189,14 @@ fn default_log_level() -> String {
 fn default_storage_backend() -> StorageBackend {
     StorageBackend::Memory
 }
-fn default_tmdb_base() -> String {
+fn default_tmdb_image_base() -> String {
     "https://image.tmdb.org/t/p".to_owned()
+}
+fn default_tmdb_api_base() -> String {
+    "https://api.themoviedb.org".to_owned()
+}
+fn default_language() -> String {
+    "en".to_owned()
 }
 fn default_max_upstream_bytes() -> usize {
     20 * 1024 * 1024
@@ -217,7 +241,9 @@ impl Config {
             storage_local_path: None,
             s3_endpoint: None,
             s3_region: None,
-            tmdb_image_base: default_tmdb_base(),
+            tmdb_image_base: default_tmdb_image_base(),
+            tmdb_api_base: default_tmdb_api_base(),
+            default_language: default_language(),
             tmdb_api_key: None,
             public_base_url: None,
             max_upstream_bytes: default_max_upstream_bytes(),

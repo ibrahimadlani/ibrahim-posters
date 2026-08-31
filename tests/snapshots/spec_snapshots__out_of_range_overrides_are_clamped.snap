@@ -4,8 +4,7 @@ expression: spec
 ---
 {
   "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
-  "source_kind": "poster",
-  "logo": null,
+  "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
   "badges": [],
   "width": "w1000",
   "blur_band_fraction": 0.6,
