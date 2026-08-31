@@ -189,6 +189,7 @@ Any change that alters rendered pixels must bump `RENDER_VERSION` in
 |---|---|
 | [PLAN.md](PLAN.md) | Architecture, types, pipeline, budgets, tests, risks, open questions |
 | [docs/adr/](docs/adr/) | Architecture decision records |
+| [docs/errors.md](docs/errors.md) | Every error code, what it means, what to do |
 | [docs/deployment.md](docs/deployment.md) | Operating the service |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Conventions |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |

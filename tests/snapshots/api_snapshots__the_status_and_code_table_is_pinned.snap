@@ -11,6 +11,30 @@ expression: table
   },
   {
     "cache_control": "no-store",
+    "code": "tmdb_not_found",
+    "retry_after": null,
+    "status": 404
+  },
+  {
+    "cache_control": "no-store",
+    "code": "no_artwork_available",
+    "retry_after": null,
+    "status": 422
+  },
+  {
+    "cache_control": "no-store",
+    "code": "tmdb_credential_missing",
+    "retry_after": null,
+    "status": 500
+  },
+  {
+    "cache_control": "no-store",
+    "code": "tmdb_unauthorised",
+    "retry_after": null,
+    "status": 500
+  },
+  {
+    "cache_control": "no-store",
     "code": "unknown_preset",
     "retry_after": null,
     "status": 400

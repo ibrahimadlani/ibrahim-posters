@@ -585,8 +585,16 @@ cache miss into an outage.
 
 ## 8. Error taxonomy
 
-Bodies are RFC 9457 `application/problem+json`. The `code` field is a stable
-part of the public contract.
+Bodies are RFC 9457 `application/problem+json`. Every code is documented in
+`docs/errors.md`, which the `type` field of each document links to.
+
+Three fields carry the meaning and are deliberately separate, because they
+answer different questions for different readers: **`code`** is what a client
+branches on, **`detail`** says what happened this time, and **`hint`** says
+what to do about it. Merging the last two produces messages that either
+describe without helping or advise without saying what went wrong.
+
+The `code` field is a stable part of the public contract.
 
 | Variant | Status | Code | Retryable |
 |---|---|---|---|

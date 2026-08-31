@@ -78,6 +78,7 @@ pub fn router(state: &AppState) -> Router {
         // be panic-free on adversarial geometry, and the byte-level guards
         // upstream cannot rule out every shape they might reject.
         .layer(axum::middleware::from_fn(record_request))
+        .layer(axum::middleware::from_fn(tag_request))
         .layer(CatchPanicLayer::new())
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
@@ -136,6 +137,69 @@ fn label_for(matched: &str) -> &'static str {
         "/metrics" => "/metrics",
         _ => "other",
     }
+}
+
+/// Header carrying the per-request correlation id.
+pub const REQUEST_ID_HEADER: &str = "x-request-id";
+
+/// Attaches a correlation id to every response and to its tracing span.
+///
+/// On *every* response, not only failures: a caller reporting "the poster
+/// looked wrong" needs an id as much as one reporting a 500, and a header that
+/// appears only sometimes is one nobody learns to quote.
+///
+/// An inbound `x-request-id` is preserved rather than replaced, so an id
+/// assigned by a gateway or a caller survives into this service's logs and the
+/// two can be joined.
+async fn tag_request(request: Request, next: Next) -> Response {
+    let inbound = request
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .map(str::to_owned);
+
+    let id = inbound.unwrap_or_else(next_request_id);
+
+    let mut response = next.run(request).await;
+    if let Ok(value) = axum::http::HeaderValue::from_str(&id) {
+        response.headers_mut().insert(
+            axum::http::HeaderName::from_static(REQUEST_ID_HEADER),
+            value,
+        );
+    }
+    response
+}
+
+/// Returns an id unique within this process.
+///
+/// A counter mixed with a per-process seed rather than a UUID: the id has to
+/// be unique across the log lines an operator is reading, not across the
+/// universe, and this needs no dependency. The seed makes ids from two
+/// processes distinguishable, which a bare counter would not be.
+#[allow(clippy::cast_possible_truncation)]
+fn next_request_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::OnceLock;
+
+    static SEED: OnceLock<u64> = OnceLock::new();
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let seed = *SEED.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            // Truncating 128 bits of nanoseconds to 64 is deliberate: only
+            // the low bits carry entropy that distinguishes two processes
+            // started moments apart, which is all this seed is for.
+            .map_or(0, |elapsed| elapsed.as_nanos() as u64)
+    });
+
+    format!(
+        "{:016x}",
+        seed ^ COUNTER
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    )
 }
 
 #[cfg(test)]

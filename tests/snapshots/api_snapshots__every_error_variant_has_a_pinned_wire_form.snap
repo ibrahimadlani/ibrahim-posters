@@ -7,7 +7,43 @@ status:        400 Bad Request
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   (none)
-body:          {"title":"Bad Request","status":400,"code":"invalid_poster_path","detail":"poster path is not a valid TMDB path: path must begin with '/'","retryable":false}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#invalid_poster_path","title":"Bad Request","status":400,"code":"invalid_poster_path","detail":"poster path is not a valid TMDB path: path must begin with '/'","hint":"Send a path from GET /v1/artwork/{kind}/{id}, or omit the field to let the service choose.","retryable":false}
+
+---
+
+code:          tmdb_not_found
+status:        404 Not Found
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#tmdb_not_found","title":"Not Found","status":404,"code":"tmdb_not_found","detail":"no movie in the TMDB catalogue with id 999999999","hint":"Check the identifier on themoviedb.org. Films use tmdb_movie_id and series use tmdb_tv_id; the two catalogues number separately, so a valid film id is rarely a valid series id.","retryable":false}
+
+---
+
+code:          no_artwork_available
+status:        422 Unprocessable Entity
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#no_artwork_available","title":"Unprocessable Entity","status":422,"code":"no_artwork_available","detail":"movie 27205 has no poster artwork","hint":"This title has no poster the service can render. Nothing to retry -- pick a different title.","retryable":false}
+
+---
+
+code:          tmdb_credential_missing
+status:        500 Internal Server Error
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#tmdb_credential_missing","title":"Internal Server Error","status":500,"code":"tmdb_credential_missing","detail":"no TMDB credential is configured; set POSTER_TMDB_API_KEY","hint":"Set POSTER_TMDB_API_KEY on the service. Either a v3 API key or a v4 read access token works.","retryable":false}
+
+---
+
+code:          tmdb_unauthorised
+status:        500 Internal Server Error
+content-type:  application/problem+json
+cache-control: no-store
+retry-after:   (none)
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#tmdb_unauthorised","title":"Internal Server Error","status":500,"code":"tmdb_unauthorised","detail":"TMDB rejected the configured credential","hint":"The configured POSTER_TMDB_API_KEY was rejected. Check it has not been revoked or truncated.","retryable":false}
 
 ---
 
@@ -16,7 +52,7 @@ status:        400 Bad Request
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   (none)
-body:          {"title":"Bad Request","status":400,"code":"unknown_preset","detail":"unknown preset: nope","retryable":false}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#unknown_preset","title":"Bad Request","status":400,"code":"unknown_preset","detail":"unknown preset: nope","hint":"GET /v1/presets lists the valid names.","retryable":false}
 
 ---
 
@@ -25,7 +61,7 @@ status:        422 Unprocessable Entity
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   (none)
-body:          {"title":"Unprocessable Entity","status":422,"code":"validation_failed","detail":"at most 6 badges are allowed, found 12","retryable":false}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#validation_failed","title":"Unprocessable Entity","status":422,"code":"validation_failed","detail":"at most 6 badges are allowed, found 12","hint":"Correct the field named in the detail. GET /v1/artwork/{kind}/{id} lists the artwork a title actually offers.","retryable":false}
 
 ---
 
@@ -34,7 +70,7 @@ status:        400 Bad Request
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   (none)
-body:          {"title":"Bad Request","status":400,"code":"malformed_request","detail":"request body is malformed: expected value at line 1 column 3","retryable":false}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#malformed_request","title":"Bad Request","status":400,"code":"malformed_request","detail":"request body is malformed: expected value at line 1 column 3","hint":"Check the JSON parses and that every field is spelled as documented; unknown fields are rejected rather than ignored.","retryable":false}
 
 ---
 
@@ -43,7 +79,7 @@ status:        404 Not Found
 content-type:  application/problem+json
 cache-control: public, max-age=60
 retry-after:   (none)
-body:          {"title":"Not Found","status":404,"code":"unknown_key","detail":"no specification stored for this key","retryable":false}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#unknown_key","title":"Not Found","status":404,"code":"unknown_key","detail":"no specification stored for this key","hint":"Keys come from POST /v1/posters. Post the specification again to get a fresh one -- an identical specification returns an identical key.","retryable":false}
 
 ---
 
@@ -52,7 +88,7 @@ status:        404 Not Found
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   (none)
-body:          {"title":"Not Found","status":404,"code":"source_not_found","detail":"upstream artwork not found","retryable":false}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#source_not_found","title":"Not Found","status":404,"code":"source_not_found","detail":"upstream artwork not found","hint":"The artwork this poster was built from is no longer on the TMDB CDN. Post the request again to resolve current artwork.","retryable":false}
 
 ---
 
@@ -61,7 +97,7 @@ status:        502 Bad Gateway
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   (none)
-body:          {"title":"Bad Gateway","status":502,"code":"source_too_large","detail":"upstream response exceeded the byte cap","retryable":false}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#source_too_large","title":"Bad Gateway","status":502,"code":"source_too_large","detail":"upstream response exceeded the byte cap","hint":"The upstream artwork is beyond the size this service will decode. Choose different artwork from GET /v1/artwork/{kind}/{id}.","retryable":false}
 
 ---
 
@@ -70,7 +106,7 @@ status:        422 Unprocessable Entity
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   (none)
-body:          {"title":"Unprocessable Entity","status":422,"code":"source_dimensions_exceeded","detail":"source is 60000x60000, exceeding the 8000 px limit","retryable":false}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#source_dimensions_exceeded","title":"Unprocessable Entity","status":422,"code":"source_dimensions_exceeded","detail":"source is 60000x60000, exceeding the 8000 px limit","hint":"The upstream artwork is beyond the size this service will decode. Choose different artwork from GET /v1/artwork/{kind}/{id}.","retryable":false}
 
 ---
 
@@ -79,7 +115,7 @@ status:        502 Bad Gateway
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   (none)
-body:          {"title":"Bad Gateway","status":502,"code":"source_decode_failed","detail":"could not decode upstream artwork: not a recognised image","retryable":false}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#source_decode_failed","title":"Bad Gateway","status":502,"code":"source_decode_failed","detail":"could not decode upstream artwork: not a recognised image","hint":"The upstream artwork could not be decoded. Choose different artwork from GET /v1/artwork/{kind}/{id}.","retryable":false}
 
 ---
 
@@ -88,7 +124,7 @@ status:        502 Bad Gateway
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   1
-body:          {"title":"Bad Gateway","status":502,"code":"upstream_unavailable","detail":"upstream unavailable: upstream responded 503 Service Unavailable","retryable":true}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#upstream_unavailable","title":"Bad Gateway","status":502,"code":"upstream_unavailable","detail":"upstream unavailable: upstream responded 503 Service Unavailable","hint":"TMDB is not responding. Retry after the interval in Retry-After.","retryable":true}
 
 ---
 
@@ -97,7 +133,7 @@ status:        504 Gateway Timeout
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   1
-body:          {"title":"Gateway Timeout","status":504,"code":"upstream_timeout","detail":"upstream timed out","retryable":true}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#upstream_timeout","title":"Gateway Timeout","status":504,"code":"upstream_timeout","detail":"upstream timed out","hint":"TMDB is not responding. Retry after the interval in Retry-After.","retryable":true}
 
 ---
 
@@ -106,7 +142,7 @@ status:        503 Service Unavailable
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   1
-body:          {"title":"Service Unavailable","status":503,"code":"overloaded","detail":"render capacity exhausted","retryable":true}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#overloaded","title":"Service Unavailable","status":503,"code":"overloaded","detail":"render capacity exhausted","hint":"The service is at render capacity. Retry after the interval in Retry-After; sustained rejections mean it needs more replicas.","retryable":true}
 
 ---
 
@@ -115,7 +151,7 @@ status:        503 Service Unavailable
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   2
-body:          {"title":"Service Unavailable","status":503,"code":"storage_unavailable","detail":"storage unavailable: connection refused","retryable":true}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#storage_unavailable","title":"Service Unavailable","status":503,"code":"storage_unavailable","detail":"storage unavailable: connection refused","hint":"The service cannot reach its object storage. Retry after the interval in Retry-After, and check /readyz.","retryable":true}
 
 ---
 
@@ -124,4 +160,4 @@ status:        500 Internal Server Error
 content-type:  application/problem+json
 cache-control: no-store
 retry-after:   (none)
-body:          {"title":"Internal Server Error","status":500,"code":"render_failed","detail":"render failed: could not encode output","retryable":false}
+body:          {"type":"https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md#render_failed","title":"Internal Server Error","status":500,"code":"render_failed","detail":"render failed: could not encode output","hint":"The service failed to produce this poster. Not a fault in the request; report it with the x-request-id from the response headers.","retryable":false}

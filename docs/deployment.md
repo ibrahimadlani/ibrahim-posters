@@ -139,6 +139,17 @@ A request that cannot get a render slot within 50 ms is rejected with `503`
 and `Retry-After: 1`. Sustained rejections mean more replicas or more cores,
 not a longer queue.
 
+## Correlating a report with a log line
+
+Every response carries `x-request-id`, successes included. An inbound one is
+preserved rather than replaced, so an id assigned by a gateway survives into
+this service's logs.
+
+When someone reports a problem, that header is the only thing that ties the
+response they saw to the line the service wrote. Every error document also
+carries a `hint` saying what to do, and a `type` URI pointing at
+[the error reference](errors.md).
+
 ## Metrics
 
 `GET /metrics` serves Prometheus text. Ten series; the ones worth alerting on:

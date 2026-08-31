@@ -867,3 +867,82 @@ async fn a_missing_credential_names_what_to_set() {
         .expect("detail")
         .contains("POSTER_TMDB_API_KEY"));
 }
+
+#[tokio::test]
+async fn every_response_carries_a_correlation_id() {
+    // On successes as well as failures: a caller reporting "the poster looked
+    // wrong" needs an id as much as one reporting a 500, and a header that
+    // appears only sometimes is one nobody learns to quote.
+    let harness = Harness::new().await;
+
+    for uri in ["/healthz", "/readyz", "/v1/presets"] {
+        let response = harness.get(uri).await;
+        assert!(
+            response.headers().contains_key("x-request-id"),
+            "{uri} carried no correlation id"
+        );
+    }
+
+    let failure = harness.get("/v1/posters/short.webp").await;
+    assert!(failure.headers().contains_key("x-request-id"));
+}
+
+#[tokio::test]
+async fn correlation_ids_are_distinct_per_request() {
+    let harness = Harness::new().await;
+
+    let first = harness.get("/healthz").await;
+    let second = harness.get("/healthz").await;
+
+    assert_ne!(
+        first.headers()["x-request-id"],
+        second.headers()["x-request-id"],
+        "two requests shared an id"
+    );
+}
+
+#[tokio::test]
+async fn an_inbound_correlation_id_is_preserved() {
+    // An id assigned by a gateway has to survive into this service's logs, or
+    // the two cannot be joined.
+    let harness = Harness::new().await;
+
+    let response = poster_service::api::router(&harness.state)
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("x-request-id", "from-a-gateway")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+
+    assert_eq!(response.headers()["x-request-id"], "from-a-gateway");
+}
+
+#[tokio::test]
+async fn an_error_document_carries_type_and_hint() {
+    // The fields that turn a failure into something actionable: `type` points
+    // at documentation, `hint` says what to do.
+    let harness = Harness::new().await;
+    let (_, body) = harness.post(json!({})).await;
+
+    assert!(
+        body["type"]
+            .as_str()
+            .expect("type")
+            .contains("docs/errors.md#"),
+        "type does not link to the documentation: {}",
+        body["type"]
+    );
+    assert!(
+        body["hint"].as_str().expect("hint").len() > 20,
+        "hint is not useful: {}",
+        body["hint"]
+    );
+    assert_ne!(
+        body["hint"], body["detail"],
+        "the hint merely restates the detail"
+    );
+}
