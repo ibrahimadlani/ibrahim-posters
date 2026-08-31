@@ -1,9 +1,49 @@
 //! The error taxonomy and its wire representation.
 //!
-//! Bodies follow RFC 9457 (`application/problem+json`). The `code` field is a
-//! **stable part of the public contract**: clients branch on it, so renaming a
-//! variant is a breaking change even though this type is internal. The
-//! snapshot tests exist to make such a rename visible in review.
+//! # One shape for every failure
+//!
+//! Every error leaves this service as an RFC 9457 `application/problem+json`
+//! document, whatever went wrong and wherever it went wrong. A caller writes
+//! one error handler, not one per endpoint.
+//!
+//! ```json
+//! {
+//!   "type":      "https://…/docs/errors.md#tmdb_not_found",
+//!   "title":     "Not Found",
+//!   "status":    404,
+//!   "code":      "tmdb_not_found",
+//!   "detail":    "no movie in the TMDB catalogue with id 999999999",
+//!   "hint":      "Check the identifier on themoviedb.org.",
+//!   "retryable": false
+//! }
+//! ```
+//!
+//! # What each field is for
+//!
+//! The three that carry the meaning are deliberately separate, because they
+//! answer different questions and are read by different audiences:
+//!
+//! - **`code`** — what class of failure this is. Stable, machine-readable, and
+//!   the only field a client should branch on.
+//! - **`detail`** — what happened *this time*, with the specific values
+//!   involved. For a human reading a log.
+//! - **`hint`** — what to do about it. Also for a human, but a different human:
+//!   `detail` describes, `hint` prescribes.
+//!
+//! Collapsing `detail` and `hint` into one string is the usual mistake. It
+//! produces messages that either describe without helping, or advise without
+//! saying what actually went wrong.
+//!
+//! `retryable` says whether repeating the identical request could ever
+//! succeed. It is not a guess about load: a `404` is never retryable no matter
+//! how long you wait, and a `503` always is.
+//!
+//! # The code is a public contract
+//!
+//! Clients branch on `code`, so renaming an [`ApiError`] variant is a breaking
+//! change even though the type is internal. The snapshot tests exist to make
+//! such a rename visible in review, and `docs/errors.md` documents every code
+//! with the `type` URI pointing at it.
 
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -168,6 +208,82 @@ impl ApiError {
         }
     }
 
+    /// Returns what the caller should do about this error.
+    ///
+    /// Separate from the message on the variant, which says what *happened*.
+    /// A caller reading `no movie in the TMDB catalogue with id 999999999`
+    /// knows the fact; the hint is what turns that into a next step.
+    ///
+    /// Written for whoever is placed to act. Most hints address the API
+    /// caller; the credential ones address whoever runs the service, since a
+    /// caller cannot fix a missing environment variable.
+    #[must_use]
+    pub const fn hint(&self) -> &'static str {
+        match self {
+            Self::InvalidPosterPath(_) => {
+                "Send a path from GET /v1/artwork/{kind}/{id}, or omit the field to let \
+                 the service choose."
+            }
+            Self::TmdbNotFound { .. } => {
+                "Check the identifier on themoviedb.org. Films use tmdb_movie_id and \
+                 series use tmdb_tv_id; the two catalogues number separately, so a \
+                 valid film id is rarely a valid series id."
+            }
+            Self::NoArtworkAvailable(_) => {
+                "This title has no poster the service can render. Nothing to retry -- \
+                 pick a different title."
+            }
+            Self::TmdbCredentialMissing => {
+                "Set POSTER_TMDB_API_KEY on the service. Either a v3 API key or a v4 \
+                 read access token works."
+            }
+            Self::TmdbUnauthorised => {
+                "The configured POSTER_TMDB_API_KEY was rejected. Check it has not been \
+                 revoked or truncated."
+            }
+            Self::UnknownPreset(_) => "GET /v1/presets lists the valid names.",
+            Self::ValidationFailed(_) => {
+                "Correct the field named in the detail. GET /v1/artwork/{kind}/{id} \
+                 lists the artwork a title actually offers."
+            }
+            Self::MalformedRequest(_) => {
+                "Check the JSON parses and that every field is spelled as documented; \
+                 unknown fields are rejected rather than ignored."
+            }
+            Self::UnknownKey => {
+                "Keys come from POST /v1/posters. Post the specification again to get a \
+                 fresh one -- an identical specification returns an identical key."
+            }
+            Self::SourceNotFound => {
+                "The artwork this poster was built from is no longer on the TMDB CDN. \
+                 Post the request again to resolve current artwork."
+            }
+            Self::SourceTooLarge | Self::SourceDimensionsExceeded { .. } => {
+                "The upstream artwork is beyond the size this service will decode. \
+                 Choose different artwork from GET /v1/artwork/{kind}/{id}."
+            }
+            Self::SourceDecodeFailed(_) => {
+                "The upstream artwork could not be decoded. Choose different artwork \
+                 from GET /v1/artwork/{kind}/{id}."
+            }
+            Self::UpstreamUnavailable(_) | Self::UpstreamTimeout => {
+                "TMDB is not responding. Retry after the interval in Retry-After."
+            }
+            Self::Overloaded => {
+                "The service is at render capacity. Retry after the interval in \
+                 Retry-After; sustained rejections mean it needs more replicas."
+            }
+            Self::StorageUnavailable(_) => {
+                "The service cannot reach its object storage. Retry after the interval \
+                 in Retry-After, and check /readyz."
+            }
+            Self::RenderFailed(_) => {
+                "The service failed to produce this poster. Not a fault in the request; \
+                 report it with the x-request-id from the response headers."
+            }
+        }
+    }
+
     /// Returns how long a client should wait before retrying, in seconds.
     ///
     /// `None` means the error is not retryable and a retry will fail the same
@@ -200,18 +316,33 @@ impl ApiError {
     }
 }
 
+/// Where each error code is documented.
+///
+/// Forms the RFC 9457 `type` URI. A reader who does not recognise a code has
+/// somewhere to go, which is the whole reason the field exists.
+const DOCS_BASE: &str = "https://github.com/ibrahimadlani/ibrahim-posters/blob/main/docs/errors.md";
+
 /// An RFC 9457 problem document.
+///
+/// Field order matches the order a human reads them in: what kind of problem,
+/// then what happened, then what to do.
 #[derive(Debug, Serialize)]
 pub struct Problem {
-    /// Short, stable, human-readable summary of the error type.
+    /// URI identifying this error class. Points at the documentation for the
+    /// code, so an unfamiliar failure is one click from an explanation.
+    #[serde(rename = "type")]
+    pub type_uri: String,
+    /// Short summary of the *class* of error. The same for every occurrence.
     pub title: &'static str,
-    /// HTTP status code, repeated in the body as the RFC prescribes.
+    /// HTTP status, repeated in the body as the RFC prescribes.
     pub status: u16,
-    /// Stable machine-readable code. Clients branch on this.
+    /// Stable machine-readable code. The only field a client should branch on.
     pub code: &'static str,
-    /// Human-readable explanation of this particular occurrence.
+    /// What happened this time, with the values involved.
     pub detail: String,
-    /// Whether retrying the identical request could succeed.
+    /// What to do about it.
+    pub hint: &'static str,
+    /// Whether repeating the identical request could ever succeed.
     pub retryable: bool,
 }
 
@@ -230,10 +361,12 @@ impl IntoResponse for ApiError {
         }
 
         let problem = Problem {
+            type_uri: format!("{DOCS_BASE}#{}", self.code()),
             title: title_for(status),
             status: status.as_u16(),
             code: self.code(),
             detail: self.to_string(),
+            hint: self.hint(),
             retryable: retry_after.is_some(),
         };
 
