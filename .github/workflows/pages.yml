@@ -1,0 +1,43 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    # Only the site itself: the playground is static, so a change to the Rust
+    # service cannot alter it, and republishing on every commit would make the
+    # deployment history useless for finding when the page changed.
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and a queued one supersedes rather than cancels:
+# the last push should win, but a deployment already uploading should finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # The page is plain HTML, CSS and JavaScript with no build step, which
+      # is deliberate: a playground for a service whose selling point is that
+      # it is easy to call should not need a toolchain to look at.
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

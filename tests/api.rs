@@ -946,3 +946,138 @@ async fn an_error_document_carries_type_and_hint() {
         "the hint merely restates the detail"
     );
 }
+
+#[tokio::test]
+async fn a_browser_may_call_the_api_cross_origin() {
+    // Without this the playground in site/ could only be served from this
+    // service's own origin, which would make a static host useless for it.
+    let harness = Harness::new().await;
+
+    let response = poster_service::api::router(&harness.state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/presets")
+                .header("origin", "https://ibrahimadlani.github.io")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["access-control-allow-origin"],
+        "*",
+        "a browser would refuse to hand this response to the page"
+    );
+}
+
+#[tokio::test]
+async fn a_preflight_permits_posting_json() {
+    // Creating a poster is a POST carrying a JSON content type, which is not
+    // a "simple request": a browser sends OPTIONS first and abandons the POST
+    // unless that answer permits both.
+    let harness = Harness::new().await;
+
+    let response = poster_service::api::router(&harness.state)
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/v1/posters")
+                .header("origin", "https://example.test")
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-headers", "content-type")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+
+    let headers = response.headers();
+    assert!(response.status().is_success());
+    assert!(headers["access-control-allow-methods"]
+        .to_str()
+        .expect("ascii")
+        .contains("POST"));
+    assert!(headers["access-control-allow-headers"]
+        .to_str()
+        .expect("ascii")
+        .contains("content-type"));
+}
+
+#[tokio::test]
+async fn the_headers_a_page_needs_are_exposed() {
+    // A browser hides every response header from script unless it is listed
+    // here, so without this the playground could show a poster but not say
+    // whether it came from cache or which request produced it.
+    let harness = Harness::new().await;
+
+    let response = poster_service::api::router(&harness.state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/presets")
+                .header("origin", "https://example.test")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+
+    let exposed = response.headers()["access-control-expose-headers"]
+        .to_str()
+        .expect("ascii")
+        .to_owned();
+
+    for header in ["x-cache", "x-request-id", "retry-after", "cache-control"] {
+        assert!(
+            exposed.contains(header),
+            "{header} is not exposed: {exposed}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_explicit_origin_list_excludes_everything_else() {
+    // The default is any origin, which is safe for an API with no cookies and
+    // no Authorization header. A deployment that is not meant to be public
+    // narrows it, and that narrowing has to actually exclude.
+    let harness = Harness::new().await;
+    let mut config = Config::defaults();
+    config.tmdb_api_base = harness.upstream.uri();
+    config.tmdb_image_base = harness.upstream.uri();
+    config.cors_allow_origins = "https://allowed.test".to_owned();
+
+    let state = AppState::new(config, Storage::in_memory()).expect("state builds");
+
+    let allowed = poster_service::api::router(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/presets")
+                .header("origin", "https://allowed.test")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(
+        allowed.headers()["access-control-allow-origin"],
+        "https://allowed.test"
+    );
+
+    let refused = poster_service::api::router(&state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/presets")
+                .header("origin", "https://other.test")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert!(
+        !refused
+            .headers()
+            .contains_key("access-control-allow-origin"),
+        "an origin outside the list was permitted"
+    );
+}

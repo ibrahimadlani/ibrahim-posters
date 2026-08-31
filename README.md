@@ -165,6 +165,17 @@ credential's shape.
 See [docs/deployment.md](docs/deployment.md) for storage lifecycle rules, CDN
 setup, capacity sizing and how to ship a renderer change.
 
+## Playground
+
+`site/` is a single page that exercises every endpoint: browse a title's
+artwork as thumbnails, pick a poster and logo, choose a preset and badges,
+render, and read the caching headers back. No build step.
+
+```sh
+POSTER_TMDB_API_KEY=… cargo run --release   # the service, on :8080
+python3 -m http.server 4173 -d site         # the page, on :4173
+```
+
 ## Development
 
 ```sh
@@ -199,6 +210,7 @@ Any change that alters rendered pixels must bump `RENDER_VERSION` in
 | [docs/deployment.md](docs/deployment.md) | Operating the service |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Conventions |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [site/](site/) | Interactive playground — browse artwork, pick, render |
 | [postman/](postman/) | Importable Postman collection and environment |
 
 ## Licence

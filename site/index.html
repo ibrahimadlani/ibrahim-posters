@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poster Service — playground</title>
+<meta name="description" content="Interactive playground for a Rust service that composites custom movie posters from TMDB artwork.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23f5c518'/><rect x='8' y='6' width='16' height='20' rx='2' fill='%2317181b'/></svg>">
+</head>
+<body>
+
+<header>
+  <h1>Poster Service</h1>
+  <p>Composites movie and series posters from TMDB artwork</p>
+  <div class="status">
+    <span class="dot" id="status-dot"></span>
+    <span id="status-text">checking…</span>
+  </div>
+</header>
+
+<main>
+  <div class="controls">
+
+    <section>
+      <h2>Service</h2>
+      <div class="field">
+        <label for="base-url">Base URL</label>
+        <input type="text" id="base-url" value="http://localhost:8080" spellcheck="false">
+        <p class="note">Start it with <code>POSTER_TMDB_API_KEY</code> set, or every poster request fails.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Title</h2>
+      <div class="field">
+        <div class="seg" id="kind-seg">
+          <button type="button" data-kind="movie" aria-pressed="true">Film</button>
+          <button type="button" data-kind="tv" aria-pressed="false">Series</button>
+        </div>
+      </div>
+      <div class="row field">
+        <div>
+          <label for="tmdb-id">TMDB id</label>
+          <input type="number" id="tmdb-id" value="27205" min="1">
+        </div>
+        <div>
+          <label for="language">Language</label>
+          <input type="text" id="language" value="en" maxlength="2" spellcheck="false">
+        </div>
+      </div>
+      <button type="button" id="browse" style="width:100%">Browse artwork</button>
+      <p class="note" id="examples">
+        Try 27205 Inception &middot; 155 The Dark Knight &middot; 1396 Breaking&nbsp;Bad (series)
+      </p>
+    </section>
+
+    <section id="artwork-section" hidden>
+      <h2>Poster <span id="poster-count" style="color:var(--dim);font-weight:400"></span></h2>
+      <div class="thumbs posters" id="poster-thumbs"></div>
+      <p class="note" id="poster-note">Textless artwork only — the version
+        without a title treatment, so the logo does not duplicate one already
+        printed.</p>
+
+      <h2 style="margin-top:18px">Logo <span id="logo-count" style="color:var(--dim);font-weight:400"></span></h2>
+      <div class="thumbs logos" id="logo-thumbs"></div>
+    </section>
+
+    <section>
+      <h2>Layout</h2>
+      <div class="row field">
+        <div>
+          <label for="preset">Preset</label>
+          <select id="preset"><option>standard</option></select>
+        </div>
+        <div>
+          <label for="width">Size</label>
+          <select id="width">
+            <option value="w1000">1000 × 1500</option>
+            <option value="w2000">2000 × 3000</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>
+          <input type="checkbox" id="use-overrides" style="width:auto;margin-right:6px">
+          Override the preset
+        </label>
+      </div>
+      <div id="overrides" hidden>
+        <div class="row field">
+          <div><label for="blur-band">Band height</label><input type="number" id="blur-band" value="0.30" step="0.05" min="0.05" max="0.6"></div>
+          <div><label for="blur-sigma">Blur σ</label><input type="number" id="blur-sigma" value="24" step="2" min="0" max="96"></div>
+        </div>
+        <div class="row field">
+          <div><label for="darken">Darkening</label><input type="number" id="darken" value="0.55" step="0.05" min="0" max="0.95"></div>
+          <div><label for="logo-width">Logo width</label><input type="number" id="logo-width" value="0.60" step="0.05" min="0.1" max="0.9"></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Badges</h2>
+      <div class="badges" id="badges"></div>
+      <button type="button" id="add-badge" style="margin-top:8px">Add badge</button>
+      <p class="note">Width follows the rendered text, so a badge is never
+        narrower than its contents. Six at most.</p>
+    </section>
+
+    <button type="button" class="primary" id="render" style="width:100%;padding:12px">
+      Create poster
+    </button>
+  </div>
+
+  <div class="stage">
+    <div id="error-slot"></div>
+
+    <div class="poster-frame" id="frame">
+      <div class="placeholder">
+        Pick a title and press <b>Create poster</b>.<br>
+        The poster renders on the first request and is cached after.
+      </div>
+    </div>
+
+    <div class="meta" id="meta" hidden></div>
+
+    <section style="margin-top:24px">
+      <div class="tabs">
+        <button type="button" data-tab="request" aria-pressed="true">Request</button>
+        <button type="button" data-tab="log" aria-pressed="false">HTTP log</button>
+        <button type="button" data-tab="about" aria-pressed="false">How it works</button>
+      </div>
+
+      <div data-panel="request">
+        <pre id="request-preview"></pre>
+      </div>
+
+      <div data-panel="log" hidden>
+        <div class="log" id="log"></div>
+      </div>
+
+      <div data-panel="about" hidden>
+        <pre style="white-space:pre-wrap;color:var(--muted)">Two endpoints, deliberately separate.
+
+POST /v1/posters
+    Resolves a TMDB identifier to artwork, hashes the resolved
+    specification, stores it, and returns an opaque key. Cheap: no
+    image work happens here.
+
+GET /v1/posters/{key}.webp
+    Renders on first request, serves from cache after. Carries
+    Cache-Control: public, max-age=31536000, immutable.
+
+A CDN will not cache a POST, and above a 90% hit rate the CDN is
+doing most of the work — hence the split.
+
+The key is blake3 over the resolved specification plus a renderer
+version. Two consequences: requests differing only in ways the
+renderer ignores land on one cache entry, and a rendering change
+cannot be served from a stale one because it cannot produce the
+same key.
+
+Resolution happens at POST, not at render. If it happened at render
+time the same URL would produce different pixels whenever TMDB
+promoted a different poster, while its immutable header promised
+otherwise.
+
+Artwork is fetched from TMDB per render and never stored. The
+service keeps what it produces, not what it consumes.</pre>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

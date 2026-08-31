@@ -24,7 +24,7 @@ tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "signal", "
 tower = { version = "0.5.3", features = ["util"] }
 # catch-panic matters more than usual here: a panic inside an imaging crate
 # would otherwise take down the worker rather than fail one request.
-tower-http = { version = "0.7", features = ["trace", "timeout", "limit", "catch-panic"] }
+tower-http = { version = "0.7", features = ["trace", "timeout", "limit", "catch-panic", "cors"] }
 
 # --- Upstream artwork -------------------------------------------------------
 # rustls rather than native-tls so the musl release image links statically;
