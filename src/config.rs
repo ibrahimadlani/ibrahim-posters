@@ -168,6 +168,19 @@ pub struct Config {
     #[serde(default = "default_language")]
     pub default_language: String,
 
+    /// Origins permitted to call this service from a browser.
+    ///
+    /// Comma-separated, or `*` for any. Defaults to any, which is safe here in
+    /// a way it would not be for most services: this API has no cookies, no
+    /// sessions and no `Authorization` header, so there is no ambient
+    /// authority for a hostile page to borrow. The worst a cross-origin caller
+    /// can do is spend the service's own render capacity, which it could do
+    /// just as easily from a server.
+    ///
+    /// Set it explicitly when the service is not meant to be public.
+    #[serde(default = "default_cors_origins")]
+    pub cors_allow_origins: String,
+
     /// Concurrent renders permitted.
     ///
     /// Defaults to the machine's core count. Renders are CPU-bound, so
@@ -197,6 +210,9 @@ fn default_tmdb_api_base() -> String {
 }
 fn default_language() -> String {
     "en".to_owned()
+}
+fn default_cors_origins() -> String {
+    "*".to_owned()
 }
 fn default_max_upstream_bytes() -> usize {
     20 * 1024 * 1024
@@ -244,6 +260,7 @@ impl Config {
             tmdb_image_base: default_tmdb_image_base(),
             tmdb_api_base: default_tmdb_api_base(),
             default_language: default_language(),
+            cors_allow_origins: default_cors_origins(),
             tmdb_api_key: None,
             public_base_url: None,
             max_upstream_bytes: default_max_upstream_bytes(),
@@ -251,6 +268,26 @@ impl Config {
             upstream_timeout_ms: default_upstream_timeout_ms(),
             render_concurrency: None,
         }
+    }
+
+    /// Returns the browser origins permitted to call this service.
+    ///
+    /// # Returns
+    ///
+    /// `None` when any origin is allowed, otherwise the explicit list.
+    #[must_use]
+    pub fn cors_origins(&self) -> Option<Vec<String>> {
+        if self.cors_allow_origins.trim() == "*" {
+            return None;
+        }
+        Some(
+            self.cors_allow_origins
+                .split(',')
+                .map(str::trim)
+                .filter(|origin| !origin.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        )
     }
 
     /// Returns the fetch limits these settings imply.
