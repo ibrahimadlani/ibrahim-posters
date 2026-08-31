@@ -36,9 +36,22 @@ Series work the same way with `"tmdb_tv_id"`.
 
 ### Choosing the artwork
 
-By default the service picks: preferred language first, then
-language-neutral, then anything else; within a band, highest rated, with votes
-breaking a tie. TMDB's editorially primary poster leads regardless.
+Posters and logos are chosen by opposite rules, because they play opposite
+roles.
+
+A **poster** is the background, so the service prefers artwork with *no*
+language — on TMDB those are the textless versions, without the title
+treatment or the credits block. Then the requested language, then anything
+else.
+
+A **logo** *is* the title, so the requested language comes first, then
+language-neutral, then anything else.
+
+Within any band: highest rated, with votes breaking a tie.
+
+Ranking posters by language the way logos are ranked gives a poster with its
+title printed twice — once in the artwork and once in the logo over it — which
+is what the textless preference exists to avoid.
 
 To choose yourself, browse what a title offers — the list is in the same order,
 so its first entry is exactly what `auto` selects:
@@ -64,9 +77,6 @@ Then name one:
 A path the title does not offer is rejected. Artwork this service cannot render
 is never listed — TMDB serves some logos as SVG, and rasterising vector artwork
 from a third party is a larger attack surface than decoding a bitmap.
-
-> Many TMDB posters already carry the title. If the logo duplicates it, pick a
-> textless poster from the catalogue — which is what manual selection is for.
 
 | Endpoint | |
 |---|---|
