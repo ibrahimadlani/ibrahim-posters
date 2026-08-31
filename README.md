@@ -30,6 +30,10 @@ curl -o poster.webp localhost:8080/v1/posters/0d31a4e0….webp
 
 Series work the same way with `"tmdb_tv_id"`.
 
+> A [Postman collection](postman/) covering every endpoint is in `postman/`,
+> with requests chained so browsing artwork feeds straight into creating a
+> poster.
+
 ### Choosing the artwork
 
 By default the service picks: preferred language first, then
@@ -178,6 +182,7 @@ Any change that alters rendered pixels must bump `RENDER_VERSION` in
 | [docs/deployment.md](docs/deployment.md) | Operating the service |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Conventions |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [postman/](postman/) | Importable Postman collection and environment |
 
 ## Licence
 

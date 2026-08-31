@@ -1,0 +1,1005 @@
+{
+  "info": {
+    "_postman_id": "9b1f4a52-7c3e-4a8d-9f21-6d0b5e2a4c81",
+    "name": "Poster Service",
+    "description": "Composites custom movie and series posters from TMDB artwork.\n\n## Getting started\n\n1. Import `poster-service.postman_environment.json` and select it.\n2. Set `base_url` if the service is not on `http://localhost:8080`.\n3. Run **Create poster \u203a Minimal**. It stores the returned key in the\n   `poster_key` collection variable, so **Get poster** works straight after.\n\n## The server needs a TMDB credential\n\nNothing in this collection carries one \u2014 the credential is the *service's*, not the caller's. Start the service with `POSTER_TMDB_API_KEY` set, or every poster request returns `tmdb_credential_missing`.\n\n```sh\nPOSTER_TMDB_API_KEY=\u2026 cargo run\n```\n\n## How the two poster endpoints fit together\n\n`POST` is cheap and uncacheable: it resolves a TMDB identifier to artwork, hashes the result and stores it. `GET` carries the resulting opaque key and is cacheable for a year. A CDN cannot cache a `POST`, which is why they are separate.\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "poster_key",
+      "value": "",
+      "description": "Set automatically by any Create poster request."
+    },
+    {
+      "key": "logo_path",
+      "value": "",
+      "description": "Set automatically by Browse artwork, for the manual-selection example."
+    },
+    {
+      "key": "poster_path",
+      "value": "",
+      "description": "Set automatically by Browse artwork."
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Discover",
+      "description": "Find out what a title offers before asking for a poster.",
+      "item": [
+        {
+          "name": "Browse artwork (film)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/artwork/movie/{{movie_id}}?language={{language}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "artwork",
+                "movie",
+                "{{movie_id}}"
+              ],
+              "query": [
+                {
+                  "key": "language",
+                  "value": "{{language}}",
+                  "description": "ISO 639-1. Affects ordering, not membership."
+                }
+              ]
+            },
+            "description": "Lists every poster and logo the film offers, **best first**.\n\nThe order is the service's own ranking, so the first entry in each list is exactly what a request with no explicit choice selects. Send a `path` from here to choose something else.\n\nArtwork the service cannot render is never listed. TMDB serves some logos as SVG, and rasterising third-party vector artwork is a larger attack surface than decoding a bitmap \u2014 Breaking Bad lists 9 logos upstream and 7 are offered."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "",
+                  "// Captured for the manual-selection example below.",
+                  "if (body.posters && body.posters.length) {",
+                  "    pm.collectionVariables.set('poster_path', body.posters[0].path);",
+                  "}",
+                  "if (body.logos && body.logos.length) {",
+                  "    pm.collectionVariables.set('logo_path', body.logos[0].path);",
+                  "}",
+                  "",
+                  "console.log(body.posters.length + ' posters, ' + body.logos.length + ' logos');",
+                  "console.log('default poster', body.posters[0] && body.posters[0].path);",
+                  "console.log('default logo  ', body.logos[0] && body.logos[0].path);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Browse artwork (series)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/artwork/tv/{{tv_id}}?language={{language}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "artwork",
+                "tv",
+                "{{tv_id}}"
+              ],
+              "query": [
+                {
+                  "key": "language",
+                  "value": "{{language}}"
+                }
+              ]
+            },
+            "description": "Same endpoint, series catalogue. `tv` and `movie` are the only two kinds."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "console.log(body.posters.length + ' posters, ' + body.logos.length + ' logos');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Presets",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/presets",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "presets"
+              ]
+            },
+            "description": "The layout catalogue, with values already resolved.\n\nThese are what a request gets before any `overrides`, so a client can predict the output without reimplementing the merge."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "console.log(body.presets.map(p => p.name).join(', '));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Create poster",
+      "description": "Each request stores its key in `poster_key`, so **Get poster** works immediately afterwards.\n\nPosting the same specification twice returns the same key: the key is a hash of the resolved specification, so equivalent requests converge on one cached poster.",
+      "item": [
+        {
+          "name": "Minimal",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "The smallest valid request. Everything else defaults: the `standard` preset, `w1000` output, and automatic artwork selection.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_movie_id\": 27205\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const ok = pm.response.code === 201;",
+                  "pm.test('201 Created', () => pm.expect(pm.response.code).to.eql(201));",
+                  "",
+                  "if (ok) {",
+                  "    const body = pm.response.json();",
+                  "    // Stored so 'Get poster' works immediately, with no copy-paste.",
+                  "    pm.collectionVariables.set('poster_key', body.key);",
+                  "    pm.test('key is a 64-character digest', () =>",
+                  "        pm.expect(body.key).to.match(/^[0-9a-f]{64}$/));",
+                  "    console.log('poster_key =', body.key);",
+                  "    console.log('url        =', body.url);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "With preset and badges",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "Badges are sized from their own rendered text, so a caller cannot ask for one narrower than its contents. At most 6, each at most 32 grapheme clusters.\n\nStyles: `solid` (white pill, dark text), `outline`, `accent`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_movie_id\": 27205,\n  \"preset\": \"cinematic\",\n  \"badges\": [\n    {\n      \"text\": \"#13 IMDb\",\n      \"style\": \"accent\"\n    },\n    {\n      \"text\": \"Nolan\",\n      \"style\": \"outline\"\n    },\n    {\n      \"text\": \"4K HDR\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const ok = pm.response.code === 201;",
+                  "pm.test('201 Created', () => pm.expect(pm.response.code).to.eql(201));",
+                  "",
+                  "if (ok) {",
+                  "    const body = pm.response.json();",
+                  "    // Stored so 'Get poster' works immediately, with no copy-paste.",
+                  "    pm.collectionVariables.set('poster_key', body.key);",
+                  "    pm.test('key is a 64-character digest', () =>",
+                  "        pm.expect(body.key).to.match(/^[0-9a-f]{64}$/));",
+                  "    console.log('poster_key =', body.key);",
+                  "    console.log('url        =', body.url);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Series",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "`tmdb_tv_id` instead of `tmdb_movie_id`. Exactly one is required \u2014 sending both is an error rather than a silent preference.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_tv_id\": 1396,\n  \"preset\": \"standard\",\n  \"badges\": [\n    {\n      \"text\": \"5 Seasons\",\n      \"style\": \"accent\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const ok = pm.response.code === 201;",
+                  "pm.test('201 Created', () => pm.expect(pm.response.code).to.eql(201));",
+                  "",
+                  "if (ok) {",
+                  "    const body = pm.response.json();",
+                  "    // Stored so 'Get poster' works immediately, with no copy-paste.",
+                  "    pm.collectionVariables.set('poster_key', body.key);",
+                  "    pm.test('key is a 64-character digest', () =>",
+                  "        pm.expect(body.key).to.match(/^[0-9a-f]{64}$/));",
+                  "    console.log('poster_key =', body.key);",
+                  "    console.log('url        =', body.url);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Choose the logo yourself",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "Run **Browse artwork** first: it fills `logo_path` with the top-ranked logo, and the response body lists the alternatives.\n\nA path the title does not offer is rejected, so one film's logo cannot land on another's poster.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_movie_id\": 27205,\n  \"preset\": \"cinematic\",\n  \"logo\": \"{{logo_path}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const ok = pm.response.code === 201;",
+                  "pm.test('201 Created', () => pm.expect(pm.response.code).to.eql(201));",
+                  "",
+                  "if (ok) {",
+                  "    const body = pm.response.json();",
+                  "    // Stored so 'Get poster' works immediately, with no copy-paste.",
+                  "    pm.collectionVariables.set('poster_key', body.key);",
+                  "    pm.test('key is a 64-character digest', () =>",
+                  "        pm.expect(body.key).to.match(/^[0-9a-f]{64}$/));",
+                  "    console.log('poster_key =', body.key);",
+                  "    console.log('url        =', body.url);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "No logo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "`\"logo\": \"none\"` renders without one even when the title has a logo.\n\nUseful because many TMDB posters already carry their title \u2014 an automatic logo then duplicates it.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_movie_id\": 27205,\n  \"preset\": \"cinematic\",\n  \"logo\": \"none\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const ok = pm.response.code === 201;",
+                  "pm.test('201 Created', () => pm.expect(pm.response.code).to.eql(201));",
+                  "",
+                  "if (ok) {",
+                  "    const body = pm.response.json();",
+                  "    // Stored so 'Get poster' works immediately, with no copy-paste.",
+                  "    pm.collectionVariables.set('poster_key', body.key);",
+                  "    pm.test('key is a 64-character digest', () =>",
+                  "        pm.expect(body.key).to.match(/^[0-9a-f]{64}$/));",
+                  "    console.log('poster_key =', body.key);",
+                  "    console.log('url        =', body.url);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Overrides and w2000",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "Per-request deviations from the preset. Every value is clamped **after** the merge, so two requests that clamp to the same number produce one cache entry rather than two.\n\nFractions are relative and unaffected by output size; pixel values scale with it.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_movie_id\": 27205,\n  \"preset\": \"cinematic\",\n  \"width\": \"w2000\",\n  \"language\": \"en\",\n  \"overrides\": {\n    \"blur_band_fraction\": 0.45,\n    \"blur_sigma\": 40.0,\n    \"darken_strength\": 0.8,\n    \"logo_width_fraction\": 0.7,\n    \"logo_bottom_fraction\": 0.12,\n    \"badge_height\": 52\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const ok = pm.response.code === 201;",
+                  "pm.test('201 Created', () => pm.expect(pm.response.code).to.eql(201));",
+                  "",
+                  "if (ok) {",
+                  "    const body = pm.response.json();",
+                  "    // Stored so 'Get poster' works immediately, with no copy-paste.",
+                  "    pm.collectionVariables.set('poster_key', body.key);",
+                  "    pm.test('key is a 64-character digest', () =>",
+                  "        pm.expect(body.key).to.match(/^[0-9a-f]{64}$/));",
+                  "    console.log('poster_key =', body.key);",
+                  "    console.log('url        =', body.url);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Get poster",
+      "description": "Uses whichever key the last Create request stored.",
+      "item": [
+        {
+          "name": "Get poster",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/posters/{{poster_key}}.webp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters",
+                "{{poster_key}}.webp"
+              ]
+            },
+            "description": "Renders on first request, serves from cache after.\n\n`Cache-Control: public, max-age=31536000, immutable` is honest because the key is a hash of the resolved specification *including* a renderer version \u2014 a rendering change cannot produce the same key, so it cannot be served from a stale entry.\n\n`x-cache` distinguishes three cases: `MISS` rendered now, `HIT` from cache, `COALESCED` served after waiting for a concurrent request to render the same key."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('is a WebP image', () =>",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.eql('image/webp'));",
+                  "pm.test('immutably cacheable', () =>",
+                  "    pm.expect(pm.response.headers.get('Cache-Control')).to.include('immutable'));",
+                  "",
+                  "console.log('x-cache:', pm.response.headers.get('x-cache'));",
+                  "console.log('bytes:  ', pm.response.responseSize);",
+                  "console.log('ms:     ', pm.response.responseTime);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get poster again (cache hit)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/posters/{{poster_key}}.webp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters",
+                "{{poster_key}}.webp"
+              ]
+            },
+            "description": "The same request a second time. Expect `x-cache: HIT` and a response in well under a millisecond \u2014 no TMDB call and no render."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('served from cache', () =>",
+                  "    pm.expect(pm.response.headers.get('x-cache')).to.eql('HIT'));",
+                  "console.log('ms:', pm.response.responseTime);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Error responses",
+      "description": "Every error is an RFC 9457 `application/problem+json` document. The `code` field is a stable contract \u2014 clients branch on it \u2014 and `retryable` says whether trying the identical request again could ever succeed.",
+      "item": [
+        {
+          "name": "No identifier",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "422 `validation_failed`. Exactly one of `tmdb_movie_id` or `tmdb_tv_id` is required.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"preset\": \"cinematic\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('problem+json', () =>",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
+                  "pm.test('carries a machine-readable code', () => pm.expect(body).to.have.property('code'));",
+                  "pm.test('says whether a retry can help', () => pm.expect(body).to.have.property('retryable'));",
+                  "console.log(pm.response.code, body.code, '-', body.detail);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Both identifiers",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "422 `validation_failed`. Sending both is rejected rather than resolved to whichever the implementation happens to check first.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_movie_id\": 27205,\n  \"tmdb_tv_id\": 1396\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('problem+json', () =>",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
+                  "pm.test('carries a machine-readable code', () => pm.expect(body).to.have.property('code'));",
+                  "pm.test('says whether a retry can help', () => pm.expect(body).to.have.property('retryable'));",
+                  "console.log(pm.response.code, body.code, '-', body.detail);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown title",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "404 `tmdb_not_found`, and **not** retryable: the identifier does not exist, so trying again cannot help.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_movie_id\": 999999999\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('problem+json', () =>",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
+                  "pm.test('carries a machine-readable code', () => pm.expect(body).to.have.property('code'));",
+                  "pm.test('says whether a retry can help', () => pm.expect(body).to.have.property('retryable'));",
+                  "console.log(pm.response.code, body.code, '-', body.detail);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Artwork the title does not offer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "422 `validation_failed`. An explicit choice is checked against the title's own catalogue, so a stale path gives a clear error rather than a poster nobody asked for.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_movie_id\": 27205,\n  \"logo\": \"/zzzzzzzzzzzzzzzzzzzzzzzzzzzz.png\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('problem+json', () =>",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
+                  "pm.test('carries a machine-readable code', () => pm.expect(body).to.have.property('code'));",
+                  "pm.test('says whether a retry can help', () => pm.expect(body).to.have.property('retryable'));",
+                  "console.log(pm.response.code, body.code, '-', body.detail);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed path",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "400 `invalid_poster_path`. The API never accepts a URL \u2014 only a TMDB path matching a strict grammar \u2014 so no input can reach another host.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_movie_id\": 27205,\n  \"logo\": \"https://example.test/x.png\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('problem+json', () =>",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
+                  "pm.test('carries a machine-readable code', () => pm.expect(body).to.have.property('code'));",
+                  "pm.test('says whether a retry can help', () => pm.expect(body).to.have.property('retryable'));",
+                  "console.log(pm.response.code, body.code, '-', body.detail);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown preset",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/posters",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters"
+              ]
+            },
+            "description": "400 `unknown_preset`. See **Presets** for the valid names.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tmdb_movie_id\": 27205,\n  \"preset\": \"nope\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('problem+json', () =>",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
+                  "pm.test('carries a machine-readable code', () => pm.expect(body).to.have.property('code'));",
+                  "pm.test('says whether a retry can help', () => pm.expect(body).to.have.property('retryable'));",
+                  "console.log(pm.response.code, body.code, '-', body.detail);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown key",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/posters/abababababababababababababababababababababababababababababababab.webp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "posters",
+                "abababababababababababababababababababababababababababababababab.webp"
+              ]
+            },
+            "description": "404 `unknown_key`, and the one error that is cacheable \u2014 for 60 seconds \u2014 so a CDN absorbs the retry storm that follows a bad link being shared."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('problem+json', () =>",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
+                  "pm.test('carries a machine-readable code', () => pm.expect(body).to.have.property('code'));",
+                  "pm.test('says whether a retry can help', () => pm.expect(body).to.have.property('retryable'));",
+                  "console.log(pm.response.code, body.code, '-', body.detail);",
+                  "pm.test('briefly cacheable', () =>",
+                  "    pm.expect(pm.response.headers.get('Cache-Control')).to.include('max-age=60'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Operations",
+      "description": "Probes and metrics. None of these need a TMDB credential.",
+      "item": [
+        {
+          "name": "Liveness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/healthz",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "healthz"
+              ]
+            },
+            "description": "Answers only whether the process can serve a request. Checks nothing else: a liveness probe that consulted a dependency would turn that dependency's outage into a restart loop."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/readyz",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "readyz"
+              ]
+            },
+            "description": "Whether object storage is reachable. 503 when it is not \u2014 the process is healthy, its dependency is not."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/metrics",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            },
+            "description": "Prometheus exposition. Worth watching: `poster_cache_lookups_total` for hit ratio, `poster_admission_rejected_total` for capacity pressure, and `poster_metadata_duration_seconds` for TMDB API latency, which is on the critical path of every `POST`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const families = pm.response.text().split('\\n').filter(l => l.startsWith('# TYPE'));",
+                  "console.log(families.length + ' metric families');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
