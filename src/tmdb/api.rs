@@ -282,35 +282,36 @@ pub async fn catalogue(
         // `null` admits language-neutral artwork, which is what most logos
         // are. Without it a film whose logo carries no language tag looks as
         // though it has no logo at all.
-        &[("include_image_language", &format!("{language},null,en"))],
+        // `null` and `xx` are how TMDB marks artwork with no language: "No
+        // Language" and "Not Specified". For posters those are the textless
+        // versions -- no title, no credits block -- which is exactly what a
+        // background wants when a logo is going to be placed over it.
+        &[("include_image_language", &format!("{language},en,null,xx"))],
     )
     .await?;
 
-    let mut posters = ranked(&images.posters, language);
+    let mut posters = rank_posters(&images.posters, language);
 
-    // The editorially primary poster leads, whether or not it ranked first --
-    // and is added if `/images` omitted it, which happens when it carries a
-    // language the include filter excluded.
+    // The editorially primary poster is offered but not promoted. It is
+    // almost always the titled one -- Inception's is tagged `en` -- so putting
+    // it first would defeat the textless preference this ranking exists for.
+    // Appended rather than dropped when `/images` omits it, which happens when
+    // it carries a language the include filter excluded: a title whose only
+    // poster is in an unlisted language then still has one.
     if let Some(primary) = detail
         .poster_path
         .as_deref()
         .and_then(|path| PosterPath::parse(path).ok())
     {
-        if let Some(position) = posters.iter().position(|option| option.path == primary) {
-            let option = posters.remove(position);
-            posters.insert(0, option);
-        } else {
-            posters.insert(
-                0,
-                ArtworkOption {
-                    path: primary,
-                    language: None,
-                    vote_average: 0.0,
-                    vote_count: 0,
-                    width: 0,
-                    height: 0,
-                },
-            );
+        if !posters.iter().any(|option| option.path == primary) {
+            posters.push(ArtworkOption {
+                path: primary,
+                language: None,
+                vote_average: 0.0,
+                vote_count: 0,
+                width: 0,
+                height: 0,
+            });
         }
     }
 
@@ -318,11 +319,61 @@ pub async fn catalogue(
         kind,
         id,
         posters,
-        logos: ranked(&images.logos, language),
+        logos: rank_logos(&images.logos, language),
     })
 }
 
-/// Orders entries best first, dropping any this service cannot render.
+/// Reports whether an entry carries no language.
+///
+/// TMDB expresses this two ways: a null `iso_639_1`, shown as "No Language",
+/// and the code `xx`, shown as "Not Specified". They mean the same thing for
+/// our purposes and are treated alike.
+fn is_textless(language: Option<&str>) -> bool {
+    matches!(language, None | Some("xx"))
+}
+
+/// Orders posters best first, preferring textless artwork.
+///
+/// **Posters rank the opposite way to logos.** A poster is a background that a
+/// title logo gets composited onto, so artwork carrying no language is what we
+/// want: on TMDB those are the textless versions, without the title treatment
+/// or the credits block. Choosing a localised poster instead produces a poster
+/// with its title printed twice — once in the artwork and once in the logo
+/// placed over it.
+///
+/// After that band it is the requested language, then anything else; within a
+/// band, highest rated, with votes breaking a rating tie.
+fn rank_posters(entries: &[ImageEntry], language: &str) -> Vec<ArtworkOption> {
+    rank_by(entries, |option| {
+        if is_textless(option.language.as_deref()) {
+            0
+        } else if option.language.as_deref() == Some(language) {
+            1
+        } else {
+            2
+        }
+    })
+}
+
+/// Orders logos best first, preferring the requested language.
+///
+/// The reverse of posters, and for the reverse reason: a logo *is* the title,
+/// so its language is the whole point. A language-neutral logo is the next
+/// best thing, since most wordmarks carry no language tag at all.
+fn rank_logos(entries: &[ImageEntry], language: &str) -> Vec<ArtworkOption> {
+    rank_by(entries, |option| {
+        if option.language.as_deref() == Some(language) {
+            0
+        } else if is_textless(option.language.as_deref()) {
+            1
+        } else {
+            2
+        }
+    })
+}
+
+/// Orders entries by a language preference, dropping any this service cannot
+/// render.
 ///
 /// Unrenderable entries are skipped rather than failing the lookup, and the
 /// reason is not only defensive: TMDB serves many logos as SVG, and
@@ -330,11 +381,9 @@ pub async fn catalogue(
 /// materially larger attack surface than decoding a bitmap. A title whose only
 /// logo is an SVG is offered no logo rather than an unsafe one.
 ///
-/// The ordering is requested language, then language-neutral, then everything
-/// else; within a band, highest rated, and votes break a rating tie. Sorted
-/// rather than filtered so a title with nothing in the requested language
+/// Sorted rather than filtered, so a title with nothing in the preferred band
 /// still offers something.
-fn ranked(entries: &[ImageEntry], language: &str) -> Vec<ArtworkOption> {
+fn rank_by(entries: &[ImageEntry], band: impl Fn(&ArtworkOption) -> u8) -> Vec<ArtworkOption> {
     let mut options: Vec<ArtworkOption> = entries
         .iter()
         .filter_map(|entry| {
@@ -350,13 +399,8 @@ fn ranked(entries: &[ImageEntry], language: &str) -> Vec<ArtworkOption> {
         .collect();
 
     options.sort_by(|a, b| {
-        let rank = |option: &ArtworkOption| match option.language.as_deref() {
-            Some(code) if code == language => 0,
-            None => 1,
-            Some(_) => 2,
-        };
-        rank(a)
-            .cmp(&rank(b))
+        band(a)
+            .cmp(&band(b))
             .then(b.vote_average.total_cmp(&a.vote_average))
             .then(b.vote_count.cmp(&a.vote_count))
     });
@@ -421,6 +465,64 @@ mod tests {
     }
 
     #[test]
+    fn a_textless_poster_outranks_a_localised_one() {
+        // The whole point of ranking posters differently from logos. A poster
+        // is a background for a logo, so the version without a title
+        // treatment is what is wanted -- otherwise the title appears twice,
+        // once in the artwork and once in the logo placed over it.
+        let entries = [
+            entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", Some("en"), 9.0, 900),
+            entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpg", None, 1.0, 1),
+        ];
+        let ranked = rank_posters(&entries, "en");
+
+        assert_eq!(
+            ranked[0].language, None,
+            "a localised poster outranked a textless one"
+        );
+    }
+
+    #[test]
+    fn not_specified_counts_as_textless_for_posters() {
+        // TMDB marks artwork with no language two ways: a null code shown as
+        // "No Language", and `xx` shown as "Not Specified". Both are textless.
+        let entries = [
+            entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", Some("en"), 9.0, 900),
+            entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpg", Some("xx"), 1.0, 1),
+        ];
+        let ranked = rank_posters(&entries, "en");
+        assert_eq!(ranked[0].language.as_deref(), Some("xx"));
+    }
+
+    #[test]
+    fn a_localised_poster_still_beats_an_unrelated_language() {
+        // Textless first, then the requested language, then anything else --
+        // so a title with no textless poster still gets a sensible one.
+        let entries = [
+            entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", Some("ru"), 9.0, 900),
+            entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpg", Some("en"), 1.0, 1),
+        ];
+        let ranked = rank_posters(&entries, "en");
+        assert_eq!(ranked[0].language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn posters_and_logos_rank_in_opposite_directions() {
+        // Stated as one assertion because it is the invariant that is easy to
+        // break by "tidying" the two functions into one.
+        let entries = [
+            entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", Some("en"), 5.0, 10),
+            entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.png", None, 5.0, 10),
+        ];
+
+        assert_eq!(rank_posters(&entries, "en")[0].language, None);
+        assert_eq!(
+            rank_logos(&entries, "en")[0].language.as_deref(),
+            Some("en")
+        );
+    }
+
+    #[test]
     fn the_requested_language_outranks_a_higher_rated_alternative() {
         // Language is the primary key, not the rating: a French caller asking
         // for a French logo should get one even when the English logo is
@@ -430,7 +532,7 @@ mod tests {
             entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", Some("en"), 9.0, 500),
             entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.png", Some("fr"), 1.0, 1),
         ];
-        let ranked = ranked(&entries, "fr");
+        let ranked = rank_logos(&entries, "fr");
         assert_eq!(ranked[0].language.as_deref(), Some("fr"));
     }
 
@@ -440,7 +542,7 @@ mod tests {
             entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", Some("de"), 9.0, 500),
             entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.png", None, 1.0, 1),
         ];
-        let ranked = ranked(&entries, "fr");
+        let ranked = rank_logos(&entries, "fr");
         assert_eq!(ranked[0].language, None, "a neutral logo should win");
     }
 
@@ -450,7 +552,7 @@ mod tests {
             entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", Some("en"), 3.0, 500),
             entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.png", Some("en"), 8.0, 10),
         ];
-        let ranked = ranked(&entries, "en");
+        let ranked = rank_logos(&entries, "en");
         assert!((ranked[0].vote_average - 8.0).abs() < f32::EPSILON);
     }
 
@@ -462,7 +564,7 @@ mod tests {
             entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png", Some("en"), 5.0, 3),
             entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.png", Some("en"), 5.0, 900),
         ];
-        let ranked = ranked(&entries, "en");
+        let ranked = rank_logos(&entries, "en");
         assert_eq!(ranked[0].vote_count, 900);
     }
 
@@ -476,7 +578,7 @@ mod tests {
             entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.svg", Some("en"), 9.9, 500),
             entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.png", Some("en"), 1.0, 1),
         ];
-        let ranked = ranked(&entries, "en");
+        let ranked = rank_logos(&entries, "en");
 
         assert_eq!(ranked.len(), 1, "the SVG survived ranking");
         assert_eq!(
@@ -494,7 +596,7 @@ mod tests {
             9.9,
             500,
         )];
-        assert!(ranked(&entries, "en").is_empty());
+        assert!(rank_logos(&entries, "en").is_empty());
     }
 
     #[test]
@@ -506,7 +608,8 @@ mod tests {
             entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.png", Some("en"), 5.0, 10),
             entry("/cccccccccccccccccccccccccccc.png", None, 5.0, 10),
         ];
-        assert_eq!(ranked(&entries, "en"), ranked(&entries, "en"));
+        assert_eq!(rank_logos(&entries, "en"), rank_logos(&entries, "en"));
+        assert_eq!(rank_posters(&entries, "en"), rank_posters(&entries, "en"));
     }
 
     #[test]
@@ -538,11 +641,11 @@ mod tests {
         let catalogue = Catalogue {
             kind: MediaKind::Movie,
             id: 1,
-            posters: ranked(
+            posters: rank_posters(
                 &[entry("/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", None, 5.0, 1)],
                 "en",
             ),
-            logos: ranked(
+            logos: rank_logos(
                 &[entry("/bbbbbbbbbbbbbbbbbbbbbbbbbbbb.png", None, 5.0, 1)],
                 "en",
             ),

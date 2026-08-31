@@ -57,11 +57,27 @@ not. Putting the resolved *paths* in the specification makes the key cover the
 artwork actually used, and leaves `GET` free of metadata calls, which matters
 because `GET` is the cached path and `POST` is not.
 
-The ranking is: requested language, then language-neutral, then any other;
-within a band, highest rated, votes breaking a rating tie. The editorially
-primary poster is promoted to the front regardless, because TMDB's designated
-poster is a better default than the highest-voted one — a poster accumulates
-votes for being striking, which is not the same as being the poster of record.
+**Posters and logos rank in opposite directions**, because they play opposite
+roles.
+
+A logo *is* the title, so its language is the whole point: requested language
+first, then language-neutral, then anything else.
+
+A poster is a *background* that a logo gets composited onto, so artwork
+carrying **no** language is what is wanted. On TMDB those are the textless
+versions — no title treatment, no credits block — marked either with a null
+`iso_639_1` ("No Language") or the code `xx` ("Not Specified"). Ranking
+posters by language the way logos are ranked produces a poster with its title
+printed twice: once in the artwork, once in the logo placed over it. Inception
+and Breaking Bad both do this, which is how it was noticed.
+
+So posters rank textless first, then the requested language, then anything
+else. Within any band it is highest rated, with votes breaking a rating tie.
+
+The editorially primary poster is offered but **not** promoted to the front. It
+is almost always the titled one — Inception's is tagged `en` — so promoting it
+would defeat the preference above. It is appended when `/images` omits it, so a
+title whose only poster carries an unlisted language still has one.
 
 Artwork this service cannot render is never offered. TMDB serves some logos as
 SVG, and rasterising vector artwork fetched from a third party through `resvg`
