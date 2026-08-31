@@ -4,6 +4,8 @@
 //! only way to observe single-flight and admission: both are invisible to a
 //! sequential test.
 
+mod support;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -46,6 +48,20 @@ fn artwork() -> Vec<u8> {
 /// finishes before the next request arrives and every test looks sequential.
 async fn harness(delay: Duration, concurrency: Option<usize>) -> (AppState, Arc<MockServer>) {
     let upstream = MockServer::start().await;
+
+    // Metadata answers immediately: the delay belongs on artwork, which is
+    // what these tests are timing.
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/3/(movie|tv)/\d+$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(support::detail_body()))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/3/(movie|tv)/\d+/images$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(support::images_body()))
+        .mount(&upstream)
+        .await;
+
     Mock::given(method("GET"))
         .and(path_regex(r"^/w\d+/.*"))
         .respond_with(
@@ -58,6 +74,8 @@ async fn harness(delay: Duration, concurrency: Option<usize>) -> (AppState, Arc<
 
     let mut config = Config::defaults();
     config.tmdb_image_base = upstream.uri();
+    config.tmdb_api_base = upstream.uri();
+    config.tmdb_api_key = Some(secrecy::SecretString::from("test-key"));
     config.render_concurrency = concurrency;
 
     let state = AppState::new(config, Storage::in_memory()).expect("state builds");
@@ -116,11 +134,7 @@ async fn concurrent_requests_for_one_cold_key_fetch_upstream_once() {
     // The failure single-flight prevents: a cold key going viral producing one
     // render, and one upstream fetch, per concurrent request.
     let (state, upstream) = harness(Duration::from_millis(150), Some(8)).await;
-    let key = create(
-        &state,
-        json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }),
-    )
-    .await;
+    let key = create(&state, json!({ "tmdb_movie_id": 27205 })).await;
 
     let mut tasks = Vec::new();
     for _ in 0..12 {
@@ -137,10 +151,18 @@ async fn concurrent_requests_for_one_cold_key_fetch_upstream_once() {
         "not every concurrent request succeeded: {statuses:?}"
     );
 
-    let fetches = upstream.received_requests().await.expect("recorded").len();
+    let fetches = upstream
+        .received_requests()
+        .await
+        .expect("recorded")
+        .iter()
+        .filter(|request| request.url.path().starts_with("/w"))
+        .count();
+    // Two, not one: a render pulls a background and a logo. What matters is
+    // that it is one render's worth rather than twelve.
     assert_eq!(
-        fetches, 1,
-        "twelve concurrent requests produced {fetches} upstream fetches"
+        fetches, 2,
+        "twelve concurrent requests should cost one render's fetches, got {fetches}"
     );
 }
 
@@ -150,11 +172,7 @@ async fn coalesced_responses_are_labelled_distinctly() {
     // means concurrent demand for cold keys, which is a capacity signal. They
     // are different things and must not report the same way.
     let (state, _upstream) = harness(Duration::from_millis(150), Some(8)).await;
-    let key = create(
-        &state,
-        json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }),
-    )
-    .await;
+    let key = create(&state, json!({ "tmdb_movie_id": 27205 })).await;
 
     let mut tasks = Vec::new();
     for _ in 0..8 {
@@ -189,7 +207,7 @@ async fn distinct_keys_render_concurrently() {
 
     let sequential_specs: Vec<Value> = PRESETS
         .iter()
-        .map(|preset| json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "preset": preset }))
+        .map(|preset| json!({ "tmdb_movie_id": 27205, "preset": preset }))
         .collect();
 
     // A distinct set of posters for the concurrent half, so the two
@@ -198,7 +216,7 @@ async fn distinct_keys_render_concurrently() {
         .iter()
         .map(|preset| {
             json!({
-                "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+                "tmdb_movie_id": 27205,
                 "preset": preset,
                 "overrides": { "blur_sigma": 31.0 }
             })
@@ -248,10 +266,17 @@ async fn distinct_keys_render_concurrently() {
     // single-flight still guarantees is that *duplicate* work is collapsed --
     // asserted by `concurrent_requests_for_one_cold_key_fetch_upstream_once`
     // -- not that unrelated posters share a fetch.
-    let fetches = upstream.received_requests().await.expect("recorded").len();
+    let fetches = upstream
+        .received_requests()
+        .await
+        .expect("recorded")
+        .iter()
+        .filter(|request| request.url.path().starts_with("/w"))
+        .count();
+    // Seven renders, two assets each.
     assert_eq!(
-        fetches, 7,
-        "expected one fetch per render across seven renders, got {fetches}"
+        fetches, 14,
+        "expected two fetches per render across seven renders, got {fetches}"
     );
 }
 
@@ -263,18 +288,14 @@ async fn a_cached_poster_is_served_while_renders_are_saturated() {
     // its slowest render.
     let (state, _upstream) = harness(Duration::from_millis(400), Some(1)).await;
 
-    let warm = create(
-        &state,
-        json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }),
-    )
-    .await;
+    let warm = create(&state, json!({ "tmdb_movie_id": 27205 })).await;
     let (status, _) = fetch(state.clone(), warm.clone()).await;
     assert_eq!(status, StatusCode::OK, "warm-up render failed");
 
     // Occupy the single render slot with a different, cold key.
     let cold = create(
         &state,
-        json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "preset": "cinematic" }),
+        json!({ "tmdb_movie_id": 27205, "preset": "cinematic" }),
     )
     .await;
     let blocker = tokio::spawn(fetch(state.clone(), cold));
@@ -339,13 +360,7 @@ async fn saturating_admission_returns_503_with_retry_after() {
 
     let mut keys = Vec::new();
     for preset in ["standard", "cinematic", "minimal", "poster_wall"] {
-        keys.push(
-            create(
-                &state,
-                json!({ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "preset": preset }),
-            )
-            .await,
-        );
+        keys.push(create(&state, json!({ "tmdb_movie_id": 27205, "preset": preset })).await);
     }
 
     let mut tasks = Vec::new();

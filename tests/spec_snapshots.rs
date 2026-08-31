@@ -5,17 +5,19 @@
 //! exact values, a diff here is also notice that every key derived from the
 //! affected preset has changed.
 
+mod support;
+
 use insta::{assert_json_snapshot, assert_snapshot};
 use poster_service::spec::{preset, request::PosterRequest};
 
 fn resolve(json: &str) -> poster_service::spec::ResolvedSpec {
     let request: PosterRequest = serde_json::from_str(json).expect("valid request");
-    preset::resolve(&request).expect("resolves")
+    preset::resolve(&request, &support::catalogue()).expect("resolves")
 }
 
 #[test]
 fn minimal_request_resolves_to_standard_preset() {
-    let spec = resolve(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
+    let spec = resolve(r#"{ "tmdb_movie_id": 27205 }"#);
     assert_json_snapshot!(spec);
 }
 
@@ -23,8 +25,7 @@ fn minimal_request_resolves_to_standard_preset() {
 fn full_request_with_overrides() {
     let spec = resolve(
         r##"{
-            "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
-            "source_kind": "backdrop",
+            "tmdb_movie_id": 27205,
             "preset": "cinematic",
             "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
             "badges": [
@@ -42,7 +43,7 @@ fn full_request_with_overrides() {
 fn out_of_range_overrides_are_clamped() {
     let spec = resolve(
         r#"{
-            "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            "tmdb_movie_id": 27205,
             "overrides": {
                 "blur_band_fraction": 99.0,
                 "blur_sigma": -50.0,
@@ -78,17 +79,11 @@ fn preset_catalogue() {
 #[test]
 fn cache_keys_are_pinned() {
     let cases = [
-        (
-            "minimal",
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#,
-        ),
-        (
-            "w2000",
-            r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "width": "w2000" }"#,
-        ),
+        ("minimal", r#"{ "tmdb_movie_id": 27205 }"#),
+        ("w2000", r#"{ "tmdb_movie_id": 27205, "width": "w2000" }"#),
         (
             "cinematic-with-badges",
-            r##"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+            r##"{ "tmdb_movie_id": 27205,
                  "preset": "cinematic",
                  "badges": [{ "text": "#17 IMDb" }] }"##,
         ),

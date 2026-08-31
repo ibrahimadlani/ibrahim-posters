@@ -9,45 +9,82 @@ Written in Rust. Renders are content-addressed and served with a one-year
 
 ## Using it
 
+Name a film or series by its TMDB identifier. The service resolves the artwork
+itself.
+
 ```sh
-# Describe a poster. Cheap: validation, a hash, one small write.
 curl -X POST localhost:8080/v1/posters \
   -H 'content-type: application/json' \
   -d '{
-    "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+    "tmdb_movie_id": 27205,
     "preset": "cinematic",
-    "logo":   "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
     "badges": [
-      { "text": "#17 IMDb",      "style": "accent"  },
-      { "text": "Oscar Nominee", "style": "outline" }
+      { "text": "#13 IMDb", "style": "accent"  },
+      { "text": "Nolan",    "style": "outline" }
     ]
   }'
-# { "key": "c44187c7...", "url": "https://…/v1/posters/c44187c7….webp" }
+# { "key": "0d31a4e0…", "url": "https://…/v1/posters/0d31a4e0….webp" }
 
-# Fetch it. Immutably cacheable.
-curl -o poster.webp localhost:8080/v1/posters/c44187c7….webp
+curl -o poster.webp localhost:8080/v1/posters/0d31a4e0….webp
 ```
+
+Series work the same way with `"tmdb_tv_id"`.
+
+### Choosing the artwork
+
+By default the service picks: preferred language first, then
+language-neutral, then anything else; within a band, highest rated, with votes
+breaking a tie. TMDB's editorially primary poster leads regardless.
+
+To choose yourself, browse what a title offers — the list is in the same order,
+so its first entry is exactly what `auto` selects:
+
+```sh
+curl localhost:8080/v1/artwork/movie/27205
+```
+```json
+{ "kind": "movie", "id": 27205,
+  "posters": [ { "path": "/xlaY2zyz….jpg", "language": "en",
+                 "vote_average": 8.03, "width": 2000, "height": 3000 } ],
+  "logos":   [ { "path": "/iXYh7y0v….png", "language": "en",
+                 "vote_average": 6.72, "width": 4317, "height": 461 } ] }
+```
+
+Then name one:
+
+```json
+{ "tmdb_movie_id": 27205, "logo": "/eS5TjZsO30LTfZISyBbPiXshAKd.png" }
+{ "tmdb_movie_id": 27205, "logo": "none" }
+```
+
+A path the title does not offer is rejected. Artwork this service cannot render
+is never listed — TMDB serves some logos as SVG, and rasterising vector artwork
+from a third party is a larger attack surface than decoding a bitmap.
+
+> Many TMDB posters already carry the title. If the logo duplicates it, pick a
+> textless poster from the catalogue — which is what manual selection is for.
 
 | Endpoint | |
 |---|---|
-| `POST /v1/posters` | Validate, resolve, hash, store the specification |
+| `POST /v1/posters` | Resolve a title, hash, store the specification |
 | `GET /v1/posters/{key}.webp` | Render or serve from cache |
+| `GET /v1/artwork/{kind}/{id}` | What a title offers, best first |
 | `GET /v1/presets` | Preset catalogue with resolved defaults |
 | `GET /healthz` `/readyz` | Liveness, readiness |
 | `GET /metrics` | Prometheus |
 
-The split exists because a CDN will not cache a `POST`, and above a 90 % hit
-rate the CDN is doing most of the work.
+The `POST`/`GET` split exists because a CDN will not cache a `POST`, and above
+a 90 % hit rate the CDN is doing most of the work.
 
 The key is `blake3` over the *resolved and clamped* specification plus a
-`RENDER_VERSION` constant. Two consequences: requests differing only in ways
-the renderer ignores converge on one cache entry, and a renderer change
-invalidates every derived key mechanically rather than needing a purge.
+`RENDER_VERSION` constant. Resolution happens at `POST`, so the key covers the
+artwork actually used: if it happened at render time, the same URL would
+produce different pixels whenever TMDB promoted a different poster, while its
+`immutable` header promised otherwise.
 
-**Only rendered results are stored.** Background artwork and logos are fetched
-from TMDB for each render and never written to storage — the service keeps
-what it produces, not what it consumes. See
-[ADR 0007](docs/adr/0007-do-not-persist-source-artwork.md).
+**Only rendered results are stored.** Artwork is fetched from TMDB per render
+and never written — the service keeps what it produces, not what it consumes.
+See [ADR 0007](docs/adr/0007-do-not-persist-source-artwork.md).
 
 ## Presets
 
@@ -88,7 +125,7 @@ catches.
 ## Running it
 
 ```sh
-cargo run                       # in-memory storage, public TMDB CDN
+POSTER_TMDB_API_KEY=… cargo run   # in-memory storage, public TMDB
 curl localhost:8080/healthz
 ```
 
@@ -100,9 +137,10 @@ docker run -p 8080:8080 -e POSTER_BIND_ADDR=0.0.0.0:8080 poster-service
 ```
 
 Configuration is `POSTER_`-prefixed environment variables; the full table is in
-[PLAN.md § 9](PLAN.md#9-configuration). `POSTER_TMDB_API_KEY` is **not**
-required — clients supply `poster_path` directly and `image.tmdb.org` serves
-artwork unauthenticated.
+[PLAN.md § 9](PLAN.md#9-configuration). **`POSTER_TMDB_API_KEY` is required**:
+resolving an identifier to artwork is an authenticated call. Either a v3 API
+key or a v4 read access token works — the scheme is inferred from the
+credential's shape.
 
 See [docs/deployment.md](docs/deployment.md) for storage lifecycle rules, CDN
 setup, capacity sizing and how to ship a renderer change.

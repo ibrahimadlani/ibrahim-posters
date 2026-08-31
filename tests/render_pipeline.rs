@@ -6,6 +6,8 @@
 //! the renderer is supposed to do, and a reference image says what it
 //! currently does.
 
+mod support;
+
 use poster_service::render::{self, source::Rgba8};
 use poster_service::spec::{preset, request::PosterRequest, ResolvedSpec};
 
@@ -39,7 +41,7 @@ fn background(width: u32, height: u32) -> Vec<u8> {
 
 fn spec_from(json: &str) -> ResolvedSpec {
     let request: PosterRequest = serde_json::from_str(json).expect("valid request");
-    preset::resolve(&request).expect("resolves")
+    preset::resolve(&request, &support::catalogue()).expect("resolves")
 }
 
 fn render(json: &str) -> Rgba8 {
@@ -87,10 +89,10 @@ fn detail(image: &Rgba8, row: u32) -> f64 {
 
 #[test]
 fn output_matches_the_requested_dimensions() {
-    let small = render(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
+    let small = render(r#"{ "tmdb_movie_id": 27205 }"#);
     assert_eq!((small.width, small.height), (1000, 1500));
 
-    let large = render(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg", "width": "w2000" }"#);
+    let large = render(r#"{ "tmdb_movie_id": 27205, "width": "w2000" }"#);
     assert_eq!((large.width, large.height), (2000, 3000));
 }
 
@@ -99,7 +101,7 @@ fn output_is_fully_opaque() {
     // The background fills the frame, so nothing may leave a transparent
     // pixel. A hole would encode as black and be invisible until someone
     // composited the poster over something.
-    let poster = render(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
+    let poster = render(r#"{ "tmdb_movie_id": 27205 }"#);
     assert!(
         poster.pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
         "output contains a transparent pixel"
@@ -108,7 +110,7 @@ fn output_is_fully_opaque() {
 
 #[test]
 fn the_blur_removes_detail_inside_the_band_only() {
-    let poster = render(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
+    let poster = render(r#"{ "tmdb_movie_id": 27205 }"#);
 
     let above = detail(&poster, 400);
     let inside = detail(&poster, 1450);
@@ -123,11 +125,11 @@ fn the_blur_removes_detail_inside_the_band_only() {
 #[test]
 fn a_larger_sigma_removes_more_detail() {
     let weak = render(
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r#"{ "tmdb_movie_id": 27205,
              "overrides": { "blur_sigma": 4.0 } }"#,
     );
     let strong = render(
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r#"{ "tmdb_movie_id": 27205,
              "overrides": { "blur_sigma": 80.0 } }"#,
     );
 
@@ -138,7 +140,7 @@ fn a_larger_sigma_removes_more_detail() {
 fn a_zero_sigma_leaves_the_band_sharp() {
     // The band is still darkened; only the blur is skipped.
     let poster = render(
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r#"{ "tmdb_movie_id": 27205,
              "overrides": { "blur_sigma": 0.0 } }"#,
     );
     assert!(
@@ -149,7 +151,7 @@ fn a_zero_sigma_leaves_the_band_sharp() {
 
 #[test]
 fn the_darkening_ramp_darkens_toward_the_bottom() {
-    let poster = render(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
+    let poster = render(r#"{ "tmdb_movie_id": 27205 }"#);
 
     let above = luminance(&poster, 400);
     let bottom = luminance(&poster, 1499);
@@ -163,11 +165,11 @@ fn the_darkening_ramp_darkens_toward_the_bottom() {
 #[test]
 fn a_stronger_darkening_setting_darkens_more() {
     let light = render(
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r#"{ "tmdb_movie_id": 27205,
              "overrides": { "darken_strength": 0.1 } }"#,
     );
     let heavy = render(
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r#"{ "tmdb_movie_id": 27205,
              "overrides": { "darken_strength": 0.95 } }"#,
     );
 
@@ -180,11 +182,11 @@ fn the_band_fraction_controls_where_treatment_begins() {
     // blurred. Without this, a band fraction that resolved correctly but was
     // never consulted would go unnoticed.
     let narrow = render(
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r#"{ "tmdb_movie_id": 27205,
              "overrides": { "blur_band_fraction": 0.10, "blur_sigma": 40.0 } }"#,
     );
     let wide = render(
-        r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r#"{ "tmdb_movie_id": 27205,
              "overrides": { "blur_band_fraction": 0.55, "blur_sigma": 40.0 } }"#,
     );
 
@@ -198,7 +200,7 @@ fn the_band_fraction_controls_where_treatment_begins() {
 #[test]
 fn badges_are_drawn_near_the_top() {
     let spec = spec_from(
-        r##"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+        r##"{ "tmdb_movie_id": 27205,
               "badges": [{ "text": "Oscar Nominee", "style": "solid" }] }"##,
     );
     let assets = render::Assets {
@@ -207,7 +209,7 @@ fn badges_are_drawn_near_the_top() {
     };
     let with_badges = render::render(&spec, &assets).expect("renders");
 
-    let bare = render(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
+    let bare = render(r#"{ "tmdb_movie_id": 27205 }"#);
 
     // Averaged over the whole badge band rather than sampled at one row. A
     // solid badge is a white pill with near-black text, so a single row can
@@ -243,7 +245,7 @@ fn badges_are_drawn_near_the_top() {
 fn rendering_is_deterministic() {
     // The cache serves one render for every request that resolves to the same
     // key, so two renders of one specification must agree exactly.
-    let json = r##"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
+    let json = r##"{ "tmdb_movie_id": 27205,
                      "preset": "cinematic",
                      "badges": [{ "text": "#17 IMDb", "style": "accent" }] }"##;
     assert_eq!(render(json).pixels, render(json).pixels);
@@ -251,7 +253,7 @@ fn rendering_is_deterministic() {
 
 #[test]
 fn corrupt_source_bytes_fail_rather_than_panic() {
-    let spec = spec_from(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
+    let spec = spec_from(r#"{ "tmdb_movie_id": 27205 }"#);
 
     for bytes in [
         Vec::new(),
@@ -273,7 +275,7 @@ fn corrupt_source_bytes_fail_rather_than_panic() {
 fn a_source_of_any_aspect_ratio_fills_the_frame() {
     // Sources are not 2:3. Fitting inside the frame would letterbox; filling
     // and cropping is what keeps the frame covered.
-    let spec = spec_from(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
+    let spec = spec_from(r#"{ "tmdb_movie_id": 27205 }"#);
 
     for (width, height) in [(3000_u32, 500_u32), (500, 3000), (1000, 1000)] {
         let assets = render::Assets {
@@ -294,7 +296,7 @@ fn a_source_of_any_aspect_ratio_fills_the_frame() {
 fn render_encoded_produces_a_readable_webp() {
     use poster_service::tmdb::probe;
 
-    let spec = spec_from(r#"{ "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" }"#);
+    let spec = spec_from(r#"{ "tmdb_movie_id": 27205 }"#);
     let assets = render::Assets {
         background: background(1200, 1800),
         logo: None,

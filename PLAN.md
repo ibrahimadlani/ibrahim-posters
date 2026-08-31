@@ -13,8 +13,10 @@ Target: **p50 < 80 ms, p99 < 250 ms** per render at w1000, **1–20 req/s** peak
 
 ### In scope for v1
 
-- `POST /v1/posters` → validate, resolve, hash, persist spec, return key and URL.
+- `POST /v1/posters` → resolve a TMDB identifier to artwork, hash, persist
+  spec, return key and URL.
 - `GET /v1/posters/{key}.webp` → render or serve from cache, immutably cacheable.
+- `GET /v1/artwork/{kind}/{id}` → the artwork a title offers, best first.
 - `GET /v1/presets` → preset catalogue with resolved defaults.
 - Backgrounds sourced exclusively from `image.tmdb.org`, addressed by
   `poster_path`, never by client-supplied URL.
@@ -24,7 +26,7 @@ Target: **p50 < 80 ms, p99 < 250 ms** per render at w1000, **1–20 req/s** peak
 
 ### Explicit non-goals
 
-| Not in v1 | Why |
+| Not in scope | Why |
 |---|---|
 | AVIF output | `ravif` encodes an order of magnitude slower than libwebp; it cannot sit on the request path at these latency targets. Revisit as an async pre-warm. |
 | Arbitrary source URLs | The single most effective SSRF control is to make user-supplied URLs unrepresentable. See § 6. |
@@ -486,14 +488,21 @@ with the tokio worker pool.
 
 ### 6.1 SSRF is eliminated, not filtered
 
-The API never accepts a URL. It accepts a `poster_path` matching:
+The API never accepts a URL. From v2 it accepts a **catalogue identifier**, a
+`u32`, which cannot carry a path segment at all — so the metadata host is
+reached with an integer interpolated into a configured base.
+
+Artwork paths still exist internally and in explicit-selection requests, and
+are still validated against: 
 
 ```
 ^/[A-Za-z0-9]{20,60}\.(jpg|png|webp)$
 ```
 
-and constructs `{TMDB_IMAGE_BASE}/{size}{poster_path}` server-side. There is no
-input that produces a request to a host other than the configured base. This
+and the CDN URL is constructed as `{TMDB_IMAGE_BASE}/{size}{poster_path}`
+server-side. Two hosts are contacted — the API and the CDN — and neither can be
+influenced by caller input: one takes an integer, the other a value from this
+grammar. There is no input that produces a request to any other host. This
 is a structural guarantee rather than a blocklist, which matters because
 blocklists lose to DNS rebinding, IPv6-mapped addresses, redirect chains and
 decimal IP encodings, whereas "the host is a compile-time-adjacent constant"
@@ -584,6 +593,10 @@ part of the public contract.
 | `InvalidPosterPath` | 400 | `invalid_poster_path` | No |
 | `UnknownPreset` | 400 | `unknown_preset` | No |
 | `MalformedRequest` | 400 | `malformed_request` | No |
+| `TmdbNotFound` | 404 | `tmdb_not_found` | No |
+| `NoArtworkAvailable` | 422 | `no_artwork_available` | No |
+| `TmdbCredentialMissing` | 500 | `tmdb_credential_missing` | No |
+| `TmdbUnauthorised` | 500 | `tmdb_unauthorised` | No |
 | `ValidationFailed` | 422 | `validation_failed` | No |
 | `SourceDimensionsExceeded` | 422 | `source_dimensions_exceeded` | No |
 | `UnknownKey` | 404 | `unknown_key` | No |
@@ -632,8 +645,11 @@ variables.
 | `POSTER_S3_ENDPOINT` | No | No | Set for MinIO, R2 or any S3-compatible host |
 | `POSTER_S3_REGION` | No | No | Region override |
 | `POSTER_PUBLIC_BASE_URL` | No | No | Origin used to build the URL returned by `POST` |
-| `POSTER_TMDB_IMAGE_BASE` | No (`https://image.tmdb.org/t/p`) | No | CDN base; the only host ever contacted |
-| `POSTER_TMDB_API_KEY` | **No** | **Yes** | See note below |
+| `POSTER_TMDB_IMAGE_BASE` | No (`https://image.tmdb.org/t/p`) | No | CDN base, where artwork is fetched |
+| `POSTER_TMDB_API_BASE` | No (`https://api.themoviedb.org`) | No | API base, where identifiers are resolved |
+| `POSTER_TMDB_API_KEY` | **Yes** | **Yes** | See note below |
+| `POSTER_DEFAULT_LANGUAGE` | No (`en`) | No | Preferred artwork language |
+| `POSTER_RENDER_CONCURRENCY` | No (core count) | No | Concurrent renders permitted |
 | `POSTER_MAX_UPSTREAM_BYTES` | No (`20971520`) | No | Streaming byte cap |
 | `POSTER_MAX_SOURCE_DIMENSION` | No (`8000`) | No | Pre-decode dimension guard |
 | `POSTER_UPSTREAM_TIMEOUT_MS` | No (`3000`) | No | Total upstream timeout |
@@ -654,12 +670,16 @@ conventional names by `object_store`, which also understands IAM roles and
 instance metadata. Declaring them here would put a credential in two places
 and break every AWS tool that already expects those names.
 
-**`TMDB_API_KEY` is not required.** Clients supply `poster_path` directly, and
-`image.tmdb.org` serves artwork without authentication. The key is needed only
-if a future endpoint resolves a TMDB *id* to a path on the client's behalf,
-which v1 does not do. It is listed here so the omission is visibly deliberate
-rather than an oversight — a service that requires no credential to fetch its
-primary input is a meaningfully smaller thing to operate.
+**`POSTER_TMDB_API_KEY` is required from v2.** Callers name artwork by
+catalogue identifier, and resolving one to a poster and a logo is an
+authenticated API call. Earlier versions took artwork paths directly and needed
+no credential at all — a smaller thing to operate, and the reason the change
+was worth an ADR rather than a line in a changelog. Either a v3 API key or a v4
+read access token works; the scheme is inferred from the credential's shape.
+
+It is modelled as optional in `Config` so a missing credential fails on the
+first request that needs one, naming what to set, rather than preventing the
+process from starting: health checks and the preset catalogue work without it.
 
 Secrets are wrapped in `secrecy::SecretString` so that `#[derive(Debug)]` on
 `Config` cannot leak them into a log line.

@@ -48,11 +48,18 @@ table is in [`PLAN.md` § 9](../PLAN.md#9-configuration). The minimum for a
 real deployment:
 
 ```sh
+POSTER_TMDB_API_KEY=…                       # required
 POSTER_STORAGE_BACKEND=s3
 POSTER_STORAGE_BUCKET=my-poster-cache
 POSTER_PUBLIC_BASE_URL=https://posters.example.com
 AWS_REGION=eu-west-1
 ```
+
+`POSTER_TMDB_API_KEY` accepts either a v3 API key or a v4 read access token;
+the scheme is inferred from the credential's shape. A missing credential does
+not stop the process starting — health checks and the preset catalogue still
+work — but every poster request fails with `tmdb_credential_missing`, which
+names the variable to set.
 
 AWS credentials use the conventional unprefixed names and are read by
 `object_store`, which also resolves IAM roles and instance metadata — so on
@@ -140,7 +147,8 @@ not a longer queue.
 |---|---|
 | `poster_admission_rejected_total` | Rising means capacity is the constraint |
 | `poster_cache_lookups_total{tier="l2",result="miss"}` | Rising miss ratio means the cache is not doing its job, and each miss is an upstream fetch |
-| `poster_upstream_duration_seconds{asset="background"}` | TMDB latency, which is now on the critical path of every render |
+| `poster_upstream_duration_seconds{asset="background"}` | TMDB CDN latency, on the critical path of every render |
+| `poster_metadata_duration_seconds` | TMDB API latency, on the critical path of every `POST` |
 | `poster_request_duration_seconds` | Latency, by route |
 | `poster_render_slots_available` | Sitting at zero means saturation |
 
