@@ -9,7 +9,19 @@ Entries below are generated from commit subjects by
 [git-cliff](https://git-cliff.org); regenerate with `git cliff -o CHANGELOG.md`.
 
 
-## [1.1.0] - 2026-08-30
+## [2.0.0] - 2026-08-31
+
+### Breaking changes
+
+- Name artwork by tmdb catalogue identifier (#17)
+
+### Fixed
+
+- Name the location a storage failure occurred at (#16)
+
+
+
+## [1.1.0] - 2026-08-31
 
 ### Changed
 
@@ -63,7 +75,8 @@ Entries below are generated from commit subjects by
 - Scaffold axum service with health endpoint (#4)
 
 
-[unreleased]: https://github.com/ibrahimadlani/ibrahim-posters/compare/v1.1.0...HEAD
+[unreleased]: https://github.com/ibrahimadlani/ibrahim-posters/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/ibrahimadlani/ibrahim-posters/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/ibrahimadlani/ibrahim-posters/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ibrahimadlani/ibrahim-posters/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/ibrahimadlani/ibrahim-posters/compare/v0.1.0...v0.2.0

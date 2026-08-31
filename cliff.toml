@@ -34,12 +34,17 @@ conventional_commits = true
 filter_unconventional = true
 protect_breaking_commits = true
 commit_parsers = [
-  { message = "^feat", group = "<!-- 0 -->Added" },
-  { message = "^fix", group = "<!-- 1 -->Fixed" },
-  { message = "^perf", group = "<!-- 2 -->Performance" },
-  { message = "^refactor", group = "<!-- 3 -->Changed" },
-  { message = "^docs", group = "<!-- 4 -->Documentation" },
-  { message = "^test", group = "<!-- 5 -->Testing" },
+  # Breaking changes lead, whatever their type. A reader scanning a changelog
+  # is asking "will this break me" before "what is new", and a `feat!` filed
+  # under Added answers the second question while hiding the first.
+  { message = "^[a-z]+(\\(.+\\))?!:", group = "<!-- 0 -->Breaking changes" },
+  { body = ".*BREAKING CHANGE", group = "<!-- 0 -->Breaking changes" },
+  { message = "^feat", group = "<!-- 1 -->Added" },
+  { message = "^fix", group = "<!-- 2 -->Fixed" },
+  { message = "^perf", group = "<!-- 3 -->Performance" },
+  { message = "^refactor", group = "<!-- 4 -->Changed" },
+  { message = "^docs", group = "<!-- 5 -->Documentation" },
+  { message = "^test", group = "<!-- 6 -->Testing" },
   # `chore` is grouped rather than skipped. Skipping it made v1.0.0 vanish
   # from the changelog entirely, because every commit in that release was a
   # chore -- and a release with no entry is worse than a noisy one.
@@ -49,7 +54,7 @@ commit_parsers = [
   # `ci` and `build` stay skipped: they change how the project is built, not
   # what it does, and a reader of a changelog is asking the second question.
   { message = "^(ci|build)", skip = true },
-  { message = "^revert", group = "<!-- 6 -->Reverted" },
+  { message = "^revert", group = "<!-- 8 -->Reverted" },
 ]
 filter_commits = false
 tag_pattern = "v[0-9]*"
