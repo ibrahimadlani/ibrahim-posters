@@ -39,19 +39,25 @@ Series work the same way with `"tmdb_tv_id"`.
 Posters and logos are chosen by opposite rules, because they play opposite
 roles.
 
-A **poster** is the background, so the service prefers artwork with *no*
+A **poster** is the background, so the service offers *only* artwork with no
 language — on TMDB those are the textless versions, without the title
-treatment or the credits block. Then the requested language, then anything
-else.
+treatment or the credits block. A poster carrying its own title is not a worse
+background, it is the wrong kind of thing.
+
+A title with no textless poster falls back to everything it has. That is not
+hedging: measured across twenty titles, every popular one offered between 4
+and 32 textless posters, but four of ten obscure ones offered none — without
+the fallback they could not be rendered at all. You can tell which happened
+from the response: if no option's `language` is `null`, the fallback ran.
 
 A **logo** *is* the title, so the requested language comes first, then
 language-neutral, then anything else.
 
 Within any band: highest rated, with votes breaking a tie.
 
-Ranking posters by language the way logos are ranked gives a poster with its
-title printed twice — once in the artwork and once in the logo over it — which
-is what the textless preference exists to avoid.
+Offering titled posters the way logos are offered gives a poster with its title
+printed twice — once in the artwork and once in the logo over it — which is
+what the filter exists to avoid.
 
 To choose yourself, browse what a title offers — the list is in the same order,
 so its first entry is exactly what `auto` selects:

@@ -20,3 +20,6 @@
 
 # Local render output from manual inspection
 /sample-poster.*
+
+# Local object store for development runs
+/.poster-store/

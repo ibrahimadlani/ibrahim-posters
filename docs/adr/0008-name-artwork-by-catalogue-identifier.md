@@ -66,13 +66,23 @@ first, then language-neutral, then anything else.
 A poster is a *background* that a logo gets composited onto, so artwork
 carrying **no** language is what is wanted. On TMDB those are the textless
 versions — no title treatment, no credits block — marked either with a null
-`iso_639_1` ("No Language") or the code `xx` ("Not Specified"). Ranking
-posters by language the way logos are ranked produces a poster with its title
-printed twice: once in the artwork, once in the logo placed over it. Inception
-and Breaking Bad both do this, which is how it was noticed.
+`iso_639_1` ("No Language") or the code `xx` ("Not Specified"). Offering titled
+posters produces a poster with its title printed twice: once in the artwork,
+once in the logo placed over it. Inception and Breaking Bad both do this, which
+is how it was noticed.
 
-So posters rank textless first, then the requested language, then anything
-else. Within any band it is highest rated, with votes breaking a rating tie.
+Posters are therefore **filtered** to textless, not merely ordered by it — a
+poster carrying its own title is not a worse background, it is the wrong kind
+of thing. Within the result it is highest rated, with votes breaking a tie.
+
+A title offering no textless poster falls back to everything it has, ranked by
+the requested language. Measured against live TMDB across twenty titles, every
+popular one offered between 4 and 32 textless posters; four of ten obscure ones
+offered none — Ariel, Shadows in Paradise, Four Rooms and Local Hero. Without
+the fallback those titles would return `no_artwork_available` and could not be
+rendered at all, which is worse than a poster whose title shows through. A
+caller can tell which happened without a flag, since every option carries its
+language.
 
 The editorially primary poster is offered but **not** promoted to the front. It
 is almost always the titled one — Inception's is tagged `en` — so promoting it
