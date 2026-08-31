@@ -182,24 +182,33 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Everything that works without a TMDB credential. The container has
+          # none deliberately: a smoke test that needed a secret could not run
+          # on a fork's pull request, and these are the endpoints that prove
+          # the binary starts and serves.
           curl -sf localhost:8080/healthz | grep -q ok
+          curl -sf localhost:8080/readyz  | grep -q ready
           curl -sf localhost:8080/v1/presets | grep -q standard
           curl -sf localhost:8080/metrics | grep -q poster_requests_total
 
-          # A poster the service cannot fetch: this exercises validation,
-          # hashing and the storage write without needing network egress to
-          # TMDB from a CI runner.
-          key=$(curl -sf -X POST localhost:8080/v1/posters \
+          # And the credential path itself: a poster request without one must
+          # fail with the code that names the variable to set, rather than a
+          # generic internal error an operator would have to go digging for.
+          body=$(curl -s -X POST localhost:8080/v1/posters \
             -H 'content-type: application/json' \
-            -d '{"source":"/kqjL17yufvn9OVLyXYpvtyrFfak.jpg"}' \
-            | python3 -c 'import sys,json;print(json.load(sys.stdin)["key"])')
-          test "${#key}" -eq 64
+            -d '{"tmdb_movie_id": 27205}')
+          echo "$body" | grep -q tmdb_credential_missing
+          echo "$body" | grep -q POSTER_TMDB_API_KEY
 
-          # And that a rejection is a problem document rather than a crash.
+          # Request validation runs before the credential is consulted, so
+          # these are reachable without one.
+          curl -s -X POST localhost:8080/v1/posters \
+            -H 'content-type: application/json' -d '{}' \
+            | grep -q "exactly one of"
           curl -s -X POST localhost:8080/v1/posters \
             -H 'content-type: application/json' \
-            -d '{"source":"https://evil.test/x.jpg"}' \
-            | grep -q invalid_poster_path
+            -d '{"tmdb_movie_id": 1, "tmdb_tv_id": 2}' \
+            | grep -q "mutually exclusive"
 
       - name: Report image size
         run: docker image inspect poster-service:${{ matrix.suffix }} --format '{{.Size}}' | numfmt --to=iec
