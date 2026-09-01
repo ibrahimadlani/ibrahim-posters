@@ -281,11 +281,8 @@ fn standard_preset_with_logo_and_badges() {
         "standard-full",
         r##"{ "tmdb_movie_id": 27205,
               "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
-              "badges": [
-                { "text": "#17 IMDb", "style": "accent" },
-                { "text": "Oscar Nominee", "style": "outline" },
-                { "text": "4K HDR" }
-              ] }"##,
+              "badges": [{ "text": "#6 Today" }],
+              "caption": { "genre": "Action", "rating": 6.5 } }"##,
         true,
     );
 }

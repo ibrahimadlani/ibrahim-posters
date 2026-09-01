@@ -36,6 +36,12 @@ pub const BLUR_SIGMA: RangeInclusive<f32> = 0.0..=96.0;
 /// discard the artwork it is supposed to sit on.
 pub const DARKEN_STRENGTH: RangeInclusive<f32> = 0.0..=0.95;
 
+/// Fraction of the band over which its ramp rises to full opacity.
+///
+/// Floored well away from zero: a ramp that saturates immediately is a hard
+/// line across the poster rather than a gradient.
+pub const BAND_RAMP_FRACTION: RangeInclusive<f32> = 0.15..=1.0;
+
 /// Logo width as a fraction of poster width.
 pub const LOGO_WIDTH_FRACTION: RangeInclusive<f32> = 0.10..=0.90;
 
@@ -43,17 +49,59 @@ pub const LOGO_WIDTH_FRACTION: RangeInclusive<f32> = 0.10..=0.90;
 pub const LOGO_BOTTOM_FRACTION: RangeInclusive<f32> = 0.02..=0.40;
 
 /// Badge row height in pixels at w1000.
-pub const BADGE_HEIGHT: RangeInclusive<u32> = 24..=96;
+///
+/// The ceiling accommodates the full-width badge the `standard` preset draws,
+/// which is a bar across the top rather than a pill and so is proportionally
+/// taller than a text-sized one.
+pub const BADGE_HEIGHT: RangeInclusive<u32> = 24..=160;
+
+/// Peak opacity of the inset shadow along the top edge.
+///
+/// Capped below 1.0 for the same reason as [`DARKEN_STRENGTH`]: the shadow
+/// seats the badge on a predictable ground, and crushing the artwork to black
+/// would defeat the point of having artwork there.
+pub const TOP_SHADOW_STRENGTH: RangeInclusive<f32> = 0.0..=0.95;
+
+/// Height of the inset top shadow, as a fraction of poster height.
+pub const TOP_SHADOW_FRACTION: RangeInclusive<f32> = 0.0..=0.60;
+
+/// Badge width as a fraction of poster width.
+///
+/// Zero is meaningful and is the floor: it selects the text-sized layout, in
+/// which each badge is as wide as its own content.
+pub const BADGE_WIDTH_FRACTION: RangeInclusive<f32> = 0.0..=0.95;
+
+/// Distance from the top edge to the badge, as a fraction of poster height.
+pub const BADGE_TOP_FRACTION: RangeInclusive<f32> = 0.0..=0.60;
+
+/// Caption text size in pixels at w1000.
+pub const CAPTION_HEIGHT: RangeInclusive<u32> = 12..=160;
+
+/// Distance from the bottom edge to the caption, as a fraction of height.
+pub const CAPTION_BOTTOM_FRACTION: RangeInclusive<f32> = 0.02..=0.40;
+
+/// Star rating, out of ten.
+///
+/// Clamped rather than rejected: a rating is upstream data a caller is
+/// relaying, not something they authored, and refusing a poster because a
+/// metadata feed returned 10.4 helps nobody.
+pub const RATING: RangeInclusive<f32> = 0.0..=10.0;
+
+/// Longest genre label, in grapheme clusters after NFC normalisation.
+pub const CAPTION_GENRE_GRAPHEMES: usize = 32;
 
 /// Longest badge text, in grapheme clusters after NFC normalisation.
 pub const BADGE_TEXT_GRAPHEMES: usize = 32;
 
-/// Most badges that may appear in the top row.
+/// Most badges that may appear on a poster.
 ///
-/// Six 32-grapheme badges cannot fit across a 1000 px poster, so this is a
-/// cheap early rejection rather than the real constraint; the real one is
-/// measured width, checked in `render::badges` once the font is known.
-pub const MAX_BADGES: usize = 6;
+/// One, deliberately. A poster carries at most one accolade -- an `IMDb` rank,
+/// an award nomination, a trending position -- because the badge's job is to
+/// give the eye a single thing to land on above the artwork. Two badges do not
+/// say twice as much; they say nothing, because neither one reads as the point.
+///
+/// This is a policy, not a capacity limit: the row could hold more.
+pub const MAX_BADGES: usize = 1;
 
 /// Clamps a float into an inclusive range.
 ///
@@ -113,7 +161,7 @@ mod tests {
         assert!((f32_into(-5.0, BLUR_BAND_FRACTION) - 0.05).abs() < f32::EPSILON);
         assert!((f32_into(5.0, BLUR_BAND_FRACTION) - 0.60).abs() < f32::EPSILON);
         assert_eq!(u32_into(0, BADGE_HEIGHT), 24);
-        assert_eq!(u32_into(9_999, BADGE_HEIGHT), 96);
+        assert_eq!(u32_into(9_999, BADGE_HEIGHT), 160);
     }
 
     #[test]

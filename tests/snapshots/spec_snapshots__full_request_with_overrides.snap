@@ -9,10 +9,6 @@ expression: spec
     {
       "text": "#17 IMDb",
       "style": "accent"
-    },
-    {
-      "text": "Oscar Nominee",
-      "style": "outline"
     }
   ],
   "width": "w2000",
@@ -21,5 +17,19 @@ expression: spec
   "darken_strength": 0.8,
   "logo_width_fraction": 0.66,
   "logo_bottom_fraction": 0.14,
-  "badge_height": 88
+  "badge_height": 88,
+  "band_colour": "#000000",
+  "band_ramp_fraction": null,
+  "top_shadow_strength": 0.0,
+  "top_shadow_fraction": 0.25,
+  "badge_width_fraction": 0.0,
+  "badge_top_fraction": 0.045,
+  "badge_from_artwork": false,
+  "caption": {
+    "genre": "Action",
+    "rating": 6.5
+  },
+  "caption_height": 176,
+  "caption_bottom_fraction": 0.107,
+  "caption_colour": "#b8a8a0"
 }

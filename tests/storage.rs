@@ -179,18 +179,12 @@ async fn an_out_of_range_stored_specification_is_rejected() {
     let (storage, backend) = shared();
     let key = standard().cache_key();
 
-    let tampered = serde_json::json!({
-        "source": "/kqjL17yufvn9OVLyXYpvtyrFfak.jpg",
-        "logo": null,
-        "badges": [],
-        "width": "w1000",
-        "blur_band_fraction": 0.30,
-        "blur_sigma": 9000.0,
-        "darken_strength": 0.55,
-        "logo_width_fraction": 0.60,
-        "logo_bottom_fraction": 0.12,
-        "badge_height": 44
-    });
+    // Serialised from a real specification and then tampered with, rather
+    // than written out field by field: a hand-written fixture has to be
+    // updated every time the specification gains a field, and the update is
+    // silent guesswork about what the rest of the document should say.
+    let mut tampered = serde_json::to_value(standard()).expect("serialises");
+    tampered["blur_sigma"] = serde_json::json!(9000.0);
 
     plant(
         &backend,

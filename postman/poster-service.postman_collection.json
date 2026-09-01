@@ -285,7 +285,7 @@
           ]
         },
         {
-          "name": "With preset and badges",
+          "name": "With a badge and a caption",
           "request": {
             "method": "POST",
             "header": [
@@ -307,7 +307,7 @@
             "description": "Badges are sized from their own rendered text, so a caller cannot ask for one narrower than its contents. At most 6, each at most 32 grapheme clusters.\n\nStyles: `solid` (white pill, dark text), `outline`, `accent`.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"tmdb_movie_id\": 27205,\n  \"preset\": \"cinematic\",\n  \"badges\": [\n    {\n      \"text\": \"#13 IMDb\",\n      \"style\": \"accent\"\n    },\n    {\n      \"text\": \"Nolan\",\n      \"style\": \"outline\"\n    },\n    {\n      \"text\": \"4K HDR\"\n    }\n  ]\n}",
+              "raw": "{\n  \"tmdb_movie_id\": 27205,\n  \"badges\": [\n    {\n      \"text\": \"#6 Today\"\n    }\n  ],\n  \"caption\": {\n    \"genre\": \"Action\",\n    \"rating\": 6.5\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"

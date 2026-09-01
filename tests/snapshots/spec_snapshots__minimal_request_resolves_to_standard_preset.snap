@@ -9,8 +9,19 @@ expression: spec
   "width": "w1000",
   "blur_band_fraction": 0.3,
   "blur_sigma": 24.0,
-  "darken_strength": 0.55,
+  "darken_strength": 0.94,
   "logo_width_fraction": 0.6,
   "logo_bottom_fraction": 0.12,
-  "badge_height": 44
+  "badge_height": 140,
+  "band_colour": "#2b0503",
+  "band_ramp_fraction": 0.65,
+  "top_shadow_strength": 0.85,
+  "top_shadow_fraction": 0.25,
+  "badge_width_fraction": 0.5,
+  "badge_top_fraction": 0.0,
+  "badge_from_artwork": true,
+  "caption": null,
+  "caption_height": 88,
+  "caption_bottom_fraction": 0.107,
+  "caption_colour": "#b8a8a0"
 }

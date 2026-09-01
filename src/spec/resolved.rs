@@ -3,9 +3,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::spec::clamp;
+use crate::spec::colour::Rgb;
 
 use crate::spec::key::CacheKey;
-use crate::spec::request::{Badge, OutputWidth};
+use crate::spec::request::{Badge, Caption, OutputWidth};
 use crate::tmdb::PosterPath;
 
 /// A fully resolved, clamped, canonical render specification.
@@ -60,6 +61,29 @@ pub struct ResolvedSpec {
     pub logo_bottom_fraction: f32,
     /// Badge row height in pixels, already scaled to the output width.
     pub badge_height: u32,
+    /// Colour the band darkens toward.
+    pub band_colour: Rgb,
+    /// Fraction of the band over which its ramp rises to full opacity, or
+    /// `None` for the quadratic ramp.
+    pub band_ramp_fraction: Option<f32>,
+    /// Peak opacity of the inset shadow along the top edge.
+    pub top_shadow_strength: f32,
+    /// Height of the inset top shadow, as a fraction of poster height.
+    pub top_shadow_fraction: f32,
+    /// Badge width as a fraction of poster width; zero sizes it to its text.
+    pub badge_width_fraction: f32,
+    /// Distance from the top edge to the badge, as a fraction of height.
+    pub badge_top_fraction: f32,
+    /// Whether the badge takes its fill and text colour from the artwork.
+    pub badge_from_artwork: bool,
+    /// Genre and rating line beneath the logo, if the request asked for one.
+    pub caption: Option<Caption>,
+    /// Caption text size in pixels, already scaled to the output width.
+    pub caption_height: u32,
+    /// Distance from the bottom edge to the caption, as a fraction of height.
+    pub caption_bottom_fraction: f32,
+    /// Caption text colour.
+    pub caption_colour: Rgb,
 }
 
 impl ResolvedSpec {

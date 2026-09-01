@@ -22,10 +22,12 @@
 
 pub mod badges;
 pub mod blur;
+pub mod caption;
 pub mod encode;
 pub mod fonts;
 pub mod gradient;
 pub mod logo;
+pub mod palette;
 pub mod pipeline;
 pub mod source;
 

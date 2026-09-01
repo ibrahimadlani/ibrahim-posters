@@ -100,11 +100,29 @@
     </section>
 
     <section>
-      <h2>Badges</h2>
+      <h2>Badge</h2>
       <div class="badges" id="badges"></div>
       <button type="button" id="add-badge" style="margin-top:8px">Add badge</button>
-      <p class="note">Width follows the rendered text, so a badge is never
-        narrower than its contents. Six at most.</p>
+      <p class="note">One per poster. The badge's job is to give the eye a
+        single thing to land on, so pick the accolade that matters — a rank, a
+        nomination, a trending position. Under <code>standard</code> its
+        colours come from the poster itself.</p>
+    </section>
+
+    <section>
+      <h2>Caption</h2>
+      <div class="row">
+        <label>Genre
+          <input id="caption-genre" type="text" placeholder="Action" maxlength="32">
+        </label>
+        <label>Rating
+          <input id="caption-rating" type="number" min="0" max="10" step="0.1"
+                 placeholder="6.5">
+        </label>
+      </div>
+      <p class="note">Optional, drawn under the logo as
+        <code>Action &middot; &#9733; 6.5</code>. Either half alone is fine;
+        leave both empty for no caption.</p>
     </section>
 
     <button type="button" class="primary" id="render" style="width:100%;padding:12px">
