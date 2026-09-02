@@ -138,14 +138,28 @@ fn a_larger_sigma_removes_more_detail() {
 
 #[test]
 fn a_zero_sigma_leaves_the_band_sharp() {
-    // The band is still darkened; only the blur is skipped.
-    let poster = render(
+    // Compared against a blurred render at the same row rather than against
+    // an absolute threshold. The band is tinted as well as blurred, and near
+    // the bottom edge the tint alone removes essentially all detail — so a
+    // threshold there passes whether or not the blur ran, which is what this
+    // test exists to distinguish.
+    let sharp = render(
         r#"{ "tmdb_movie_id": 27205,
              "overrides": { "blur_sigma": 0.0 } }"#,
     );
+    let blurred = render(
+        r#"{ "tmdb_movie_id": 27205,
+             "overrides": { "blur_sigma": 80.0 } }"#,
+    );
+
+    // Past the feather, so the blurred band is fully composited, but before
+    // the tint saturates. The tint scales both renders alike, so what is left
+    // between them at this row is the blur and nothing else.
+    let row = 1310;
+    let (sharp, blurred) = (detail(&sharp, row), detail(&blurred, row));
     assert!(
-        detail(&poster, 1450) > 0.5,
-        "sigma 0 should not have blurred anything"
+        sharp > blurred * 4.0,
+        "sigma 0 left {sharp} detail against {blurred} for a blurred render"
     );
 }
 

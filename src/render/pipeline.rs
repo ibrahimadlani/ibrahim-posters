@@ -13,8 +13,8 @@
 use tiny_skia::{PixmapPaint, Transform};
 
 use crate::render::source::Rgba8;
-use crate::render::{badges, blur, encode, gradient, logo, source, RenderError};
-use crate::spec::ResolvedSpec;
+use crate::render::{badges, blur, caption, encode, gradient, logo, palette, source, RenderError};
+use crate::spec::{ResolvedSpec, Rgb};
 
 /// Assets a render consumes, already fetched.
 ///
@@ -32,8 +32,14 @@ pub struct Assets {
 /// Fraction of the band height over which the blur fades in at its top edge.
 const FEATHER_RATIO: f32 = 0.55;
 
-/// Distance from the top edge to the badge row, as a fraction of height.
-const BADGE_TOP_FRACTION: f32 = 0.045;
+/// Clearance kept between the caption and the logo above it, as a multiple of
+/// the caption's text size.
+///
+/// The logo is lifted by this much when a caption is present rather than the
+/// preset carrying two logo positions, because a preset describes one layout
+/// and "where the logo sits" should not depend on which of them a caller
+/// happens to be reading.
+const CAPTION_LOGO_CLEARANCE: f32 = 1.5;
 
 /// Renders a poster to straight-alpha RGBA8.
 ///
@@ -68,17 +74,37 @@ pub fn render(spec: &ResolvedSpec, assets: &Assets) -> Result<Rgba8, RenderError
         apply_blur_band(&mut canvas, band_height, spec.blur_sigma);
     }
 
-    // 5. Darken for legibility, over the same band.
+    // 5. Tint the band for legibility.
     if band_height > 0 && spec.darken_strength > 0.0 {
-        apply_darkening(&mut canvas, band_height, spec.darken_strength);
+        apply_band_tint(
+            &mut canvas,
+            band_height,
+            spec.darken_strength,
+            spec.band_colour,
+            spec.band_ramp_fraction,
+        );
     }
 
-    // 6-7. Composite the sharp elements.
+    // 6. Seat the badge on a predictable ground. Read the badge colour from
+    // the artwork *before* this runs: the shadow is part of the treatment, and
+    // sampling after it would darken the badge in step with the shadow instead
+    // of matching the poster.
+    let badge_palette = spec
+        .badge_from_artwork
+        .then(|| palette::from_artwork(&canvas));
+
+    let shadow_extent = fraction_of(height, spec.top_shadow_fraction);
+    if shadow_extent > 0 && spec.top_shadow_strength > 0.0 {
+        apply_inset_top_shadow(&mut canvas, shadow_extent, spec.top_shadow_strength);
+    }
+
+    // 7-8. Composite the sharp elements.
     let mut pixmap = source::to_pixmap(&canvas)?;
     if let Some(bytes) = &assets.logo {
-        draw_logo(&mut pixmap, bytes, spec)?;
+        draw_logo(&mut pixmap, bytes, spec, logo_bottom_fraction(spec, height))?;
     }
-    draw_badges(&mut pixmap, spec)?;
+    draw_caption(&mut pixmap, spec)?;
+    draw_badges(&mut pixmap, spec, badge_palette)?;
 
     source::from_pixmap(&pixmap)
 }
@@ -173,25 +199,75 @@ fn apply_blur_band(canvas: &mut Rgba8, band_height: u32, sigma: f32) {
     }
 }
 
-/// Applies the darkening ramp in place over the bottom band.
+/// Blends the bottom band toward `colour` along the darkening ramp.
 ///
-/// Same bound as the blend above: `channel * keep / 255` with `keep <= 255`
-/// cannot exceed 255.
+/// # Why a colour and not just black
+///
+/// Blurring and darkening alone leave the band a desaturated version of
+/// whatever happened to be at the bottom of the artwork, which differs from
+/// poster to poster and from a wall of posters reads as inconsistency rather
+/// than as variety. Blending toward a fixed colour gives every poster the same
+/// footing while the blur keeps the artwork's own shapes visible through it.
+///
+/// Black is the identity here: blending toward `#000000` is exactly the
+/// multiply this function used to perform, so a preset that names no colour
+/// renders as it always has.
+///
+/// Same bound as the blend above: `channel * keep + tint * alpha` with the two
+/// weights summing to 255 cannot exceed `255 * 255`, so the quotient is at
+/// most 255.
 #[allow(clippy::cast_possible_truncation)]
-fn apply_darkening(canvas: &mut Rgba8, band_height: u32, strength: f32) {
+fn apply_band_tint(
+    canvas: &mut Rgba8,
+    band_height: u32,
+    strength: f32,
+    colour: Rgb,
+    saturate_at: Option<f32>,
+) {
     let stride = canvas.width as usize * 4;
     let top = canvas.height.saturating_sub(band_height);
-    let ramp = gradient::darken_alpha(band_height, strength);
+    let ramp = gradient::darken_alpha(band_height, strength, saturate_at);
+    let tint = colour.to_bytes();
 
     for (row, alpha) in ramp.iter().enumerate() {
-        let keep = u32::from(255 - *alpha);
+        let weight = u32::from(*alpha);
+        let keep = 255 - weight;
         let row_start = (top as usize + row) * stride;
         for pixel in canvas.pixels[row_start..row_start + stride]
             .as_chunks_mut::<4>()
             .0
         {
-            // Multiply the colour channels toward black; alpha is untouched
-            // because the background is opaque and must stay so.
+            // Colour channels only; alpha is untouched because the background
+            // is opaque and must stay so.
+            for (channel, tint) in pixel[..3].iter_mut().zip(tint) {
+                *channel =
+                    ((u32::from(*channel) * keep + u32::from(tint) * weight + 127) / 255) as u8;
+            }
+        }
+    }
+}
+
+/// Darkens the artwork under the top edge, strongest at the edge itself.
+///
+/// The badge sits at the top of the poster over artwork the service does not
+/// choose, so its legibility would otherwise depend on whatever the title's
+/// designer put there. This ramp makes the ground behind it predictable
+/// without hiding the artwork: it is gone well before the halfway line.
+///
+/// Same bound as the tint above.
+#[allow(clippy::cast_possible_truncation)]
+fn apply_inset_top_shadow(canvas: &mut Rgba8, extent: u32, strength: f32) {
+    let stride = canvas.width as usize * 4;
+    let extent = extent.min(canvas.height);
+    let ramp = gradient::inset_top_alpha(extent, strength);
+
+    for (row, alpha) in ramp.iter().enumerate() {
+        let keep = u32::from(255 - *alpha);
+        let row_start = row * stride;
+        for pixel in canvas.pixels[row_start..row_start + stride]
+            .as_chunks_mut::<4>()
+            .0
+        {
             for channel in &mut pixel[..3] {
                 *channel = ((u32::from(*channel) * keep + 127) / 255) as u8;
             }
@@ -204,13 +280,14 @@ fn draw_logo(
     pixmap: &mut tiny_skia::Pixmap,
     bytes: &[u8],
     spec: &ResolvedSpec,
+    bottom_fraction: f32,
 ) -> Result<(), RenderError> {
     let decoded = source::decode(bytes)?;
     let Some(placement) = logo::place(
         spec.dimensions(),
         (decoded.width, decoded.height),
         spec.logo_width_fraction,
-        spec.logo_bottom_fraction,
+        bottom_fraction,
     ) else {
         return Ok(());
     };
@@ -229,6 +306,69 @@ fn draw_logo(
     Ok(())
 }
 
+/// Returns how far above the bottom edge the logo sits.
+///
+/// Without a caption this is the preset's own value. With one, the logo is
+/// raised enough to clear the caption, so the two never overlap on a poster
+/// whose logo happens to be tall.
+///
+/// Dimensions are at most 3000 and the caption size at most 320, so both
+/// convert to `f32` exactly.
+#[allow(clippy::cast_precision_loss)]
+fn logo_bottom_fraction(spec: &ResolvedSpec, height: u32) -> f32 {
+    if spec.caption.is_none() || height == 0 {
+        return spec.logo_bottom_fraction;
+    }
+    let clearance = CAPTION_LOGO_CLEARANCE * spec.caption_height as f32 / height as f32;
+    spec.logo_bottom_fraction
+        .max(spec.caption_bottom_fraction + clearance)
+}
+
+/// Rasterises and composites the genre and rating line.
+///
+/// Drawn after the logo and before the badge, which is only a matter of
+/// overlap order; the three occupy separate bands of the poster by
+/// construction.
+///
+/// The caption size is at most 320 px and poster dimensions at most 3000, so
+/// the conversions are exact. The placement is clamped into the frame before
+/// it is used.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+fn draw_caption(pixmap: &mut tiny_skia::Pixmap, spec: &ResolvedSpec) -> Result<(), RenderError> {
+    let Some(caption) = &spec.caption else {
+        return Ok(());
+    };
+
+    let (width, height) = spec.dimensions();
+    let Some(strip) = caption::rasterise(
+        &caption.line(),
+        spec.caption_height as f32,
+        spec.caption_colour,
+    )?
+    else {
+        return Ok(());
+    };
+
+    let centre = height as f32 * (1.0 - spec.caption_bottom_fraction);
+    let x = ((width as i32 - strip.width() as i32) / 2).max(0);
+    let y = (centre - strip.height() as f32 / 2.0).max(0.0) as i32;
+
+    pixmap.draw_pixmap(
+        x,
+        y,
+        strip.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+    Ok(())
+}
+
 /// Lays out and composites the badge row.
 ///
 /// `badge_height` is clamped to at most 192 and poster height to 3000, so both
@@ -238,14 +378,22 @@ fn draw_logo(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-fn draw_badges(pixmap: &mut tiny_skia::Pixmap, spec: &ResolvedSpec) -> Result<(), RenderError> {
+fn draw_badges(
+    pixmap: &mut tiny_skia::Pixmap,
+    spec: &ResolvedSpec,
+    derived: Option<palette::BadgePalette>,
+) -> Result<(), RenderError> {
     if spec.badges.is_empty() {
         return Ok(());
     }
 
     let (width, height) = spec.dimensions();
-    let laid_out = badges::layout(&spec.badges, spec.badge_height as f32)?;
-    let Some(row) = badges::rasterise(&laid_out)? else {
+    // Zero means "size each badge to its own text", which is what the
+    // fraction's floor encodes, so it maps to no fixed width at all.
+    let fixed =
+        (spec.badge_width_fraction > 0.0).then_some(width as f32 * spec.badge_width_fraction);
+    let laid_out = badges::layout(&spec.badges, spec.badge_height as f32, fixed)?;
+    let Some(row) = badges::rasterise(&laid_out, derived)? else {
         return Ok(());
     };
 
@@ -259,7 +407,7 @@ fn draw_badges(pixmap: &mut tiny_skia::Pixmap, spec: &ResolvedSpec) -> Result<()
         clippy::cast_sign_loss,
         clippy::cast_possible_wrap
     )]
-    let y = (height as f32 * BADGE_TOP_FRACTION) as i32;
+    let y = (height as f32 * spec.badge_top_fraction) as i32;
 
     pixmap.draw_pixmap(
         x,

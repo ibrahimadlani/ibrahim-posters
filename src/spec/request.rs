@@ -53,6 +53,14 @@ pub enum SpecError {
         /// Position of the offending badge in the row.
         index: usize,
     },
+    /// A caption's genre label was longer than the line can hold.
+    #[error("caption genre is limited to {max} characters, found {found}")]
+    CaptionGenreTooLong {
+        /// Configured maximum.
+        max: usize,
+        /// Length supplied.
+        found: usize,
+    },
     /// Neither catalogue identifier was supplied.
     #[error("exactly one of tmdb_movie_id or tmdb_tv_id is required")]
     NoIdentifier,
@@ -219,6 +227,83 @@ impl Badge {
     }
 }
 
+/// The genre and rating line beneath the logo.
+///
+/// Both halves are optional and either alone is a valid caption, because the
+/// two come from different places: a genre is almost always known, a rating is
+/// not meaningful until a title has been released.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Caption {
+    /// Genre label, NFC-normalised during validation.
+    #[serde(default)]
+    pub genre: Option<String>,
+    /// Star rating out of ten, clamped and rendered to one decimal.
+    #[serde(default)]
+    pub rating: Option<f32>,
+}
+
+/// Separator between the genre and the rating.
+const CAPTION_SEPARATOR: &str = " \u{b7} ";
+
+impl Caption {
+    /// Normalises and checks this caption.
+    ///
+    /// # Returns
+    ///
+    /// The normalised caption, or `None` if neither half survives — an empty
+    /// caption is the same thing as no caption, and treating it as absent
+    /// spares the renderer a case that would draw nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`SpecError::CaptionGenreTooLong`] beyond
+    /// [`clamp::CAPTION_GENRE_GRAPHEMES`] clusters.
+    pub fn normalised(&self) -> Result<Option<Self>, SpecError> {
+        let genre = match &self.genre {
+            None => None,
+            Some(raw) => {
+                let text: String = raw.nfc().filter(|c| !c.is_control()).collect();
+                let text = text.trim().to_owned();
+                let found = text.graphemes(true).count();
+                if found > clamp::CAPTION_GENRE_GRAPHEMES {
+                    return Err(SpecError::CaptionGenreTooLong {
+                        max: clamp::CAPTION_GENRE_GRAPHEMES,
+                        found,
+                    });
+                }
+                (!text.is_empty()).then_some(text)
+            }
+        };
+
+        let rating = self
+            .rating
+            .map(|value| clamp::f32_into(value, clamp::RATING));
+
+        if genre.is_none() && rating.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(Self { genre, rating }))
+    }
+
+    /// Returns the line as it is drawn.
+    ///
+    /// The star is U+2605, which the embedded face carries, rather than a
+    /// hand-built path: a glyph is shaped and hinted alongside the digits
+    /// beside it, and a path would have to be positioned and scaled by hand
+    /// against a baseline the shaper owns.
+    #[must_use]
+    pub fn line(&self) -> String {
+        let rating = self.rating.map(|value| format!("\u{2605} {value:.1}"));
+        match (&self.genre, rating) {
+            (Some(genre), Some(rating)) => format!("{genre}{CAPTION_SEPARATOR}{rating}"),
+            (Some(genre), None) => genre.clone(),
+            (None, Some(rating)) => rating,
+            (None, None) => String::new(),
+        }
+    }
+}
+
 /// Per-request deviations from a preset.
 ///
 /// Every field is optional, and `None` means "inherit from the preset" rather
@@ -332,6 +417,9 @@ pub struct PosterRequest {
     /// Badges rendered along the top edge, left to right.
     #[serde(default)]
     pub badges: Vec<Badge>,
+    /// Genre and rating line beneath the logo. Omitted by default.
+    #[serde(default)]
+    pub caption: Option<Caption>,
     /// Output resolution.
     #[serde(default)]
     pub width: OutputWidth,
@@ -409,6 +497,15 @@ impl PosterRequest {
             .enumerate()
             .map(|(index, badge)| badge.normalised(index))
             .collect()
+    }
+
+    /// Normalises the caption, if there is one.
+    ///
+    /// # Errors
+    ///
+    /// See [`Caption::normalised`].
+    pub fn normalised_caption(&self) -> Result<Option<Caption>, SpecError> {
+        self.caption.as_ref().map_or(Ok(None), Caption::normalised)
     }
 }
 

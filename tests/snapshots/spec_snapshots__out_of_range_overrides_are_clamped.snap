@@ -12,5 +12,16 @@ expression: spec
   "darken_strength": 0.95,
   "logo_width_fraction": 0.1,
   "logo_bottom_fraction": 0.4,
-  "badge_height": 96
+  "badge_height": 160,
+  "band_colour": "#2b0503",
+  "band_ramp_fraction": 0.65,
+  "top_shadow_strength": 0.85,
+  "top_shadow_fraction": 0.25,
+  "badge_width_fraction": 0.5,
+  "badge_top_fraction": 0.0,
+  "badge_from_artwork": true,
+  "caption": null,
+  "caption_height": 88,
+  "caption_bottom_fraction": 0.107,
+  "caption_colour": "#b8a8a0"
 }

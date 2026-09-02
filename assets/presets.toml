@@ -10,14 +10,38 @@
 # renders reachable by their own keys.
 
 [standard]
-# The default. Band covers the lower third, which is where a title logo sits
-# on most theatrical artwork.
+# The default, and the only preset that reproduces the reference treatment:
+# a tinted band, an inset shadow under the top edge, and a single full-width
+# badge coloured from the artwork.
 blur_band_fraction = 0.30
 blur_sigma = 24.0
-darken_strength = 0.55
+# Nearly opaque, because the band is a ground for the logo rather than a
+# darkened view of the artwork. What keeps the artwork present is the blur
+# above the ramp's peak, not the ramp letting colour through at the bottom.
+darken_strength = 0.94
+# A dark warm neutral rather than black. Blending toward a colour gives every
+# poster the same footing at the bottom edge whatever its own palette, which
+# is what makes a wall of them read as one set.
+band_colour = "#2b0503"
+# Saturating rather than the default quadratic: the band is a ground the logo
+# sits on, so the tint arrives early and is complete well before the bottom
+# edge, leaving the artwork visible only through the band's upper reaches.
+band_ramp_fraction = 0.65
+# The badge sits on artwork the service does not choose, so the top of the
+# frame is darkened to give it a predictable ground.
+top_shadow_strength = 0.85
+top_shadow_fraction = 0.25
 logo_width_fraction = 0.60
 logo_bottom_fraction = 0.12
-badge_height = 44
+# A bar across the top rather than a pill: fixed width, flush with the edge,
+# and coloured from the poster it sits on.
+badge_height = 140
+badge_width_fraction = 0.50
+badge_top_fraction = 0.0
+badge_from_artwork = true
+caption_height = 88
+caption_bottom_fraction = 0.107
+caption_colour = "#b8a8a0"
 
 [cinematic]
 # Taller band and a heavier ramp, for artwork with a busy lower half where a

@@ -1,8 +1,9 @@
 # Poster Service
 
 HTTP API that composites custom movie posters from TMDB artwork: a background
-image, a gradient gaussian blur rising from the bottom edge, a darkening ramp
-for legibility, a title logo, and a row of text-driven badges.
+image, a gradient gaussian blur rising from the bottom edge, a tinted ramp for
+legibility, a title logo, an optional genre and rating line, and a single
+badge coloured from the poster it sits on.
 
 Written in Rust. Renders are content-addressed and served with a one-year
 `immutable` cache directive, so a CDN does the work in steady state.
@@ -17,11 +18,8 @@ curl -X POST localhost:8080/v1/posters \
   -H 'content-type: application/json' \
   -d '{
     "tmdb_movie_id": 27205,
-    "preset": "cinematic",
-    "badges": [
-      { "text": "#13 IMDb", "style": "accent"  },
-      { "text": "Nolan",    "style": "outline" }
-    ]
+    "badges": [{ "text": "#6 Today" }],
+    "caption": { "genre": "Action", "rating": 6.5 }
   }'
 # { "key": "0d31a4e0…", "url": "https://…/v1/posters/0d31a4e0….webp" }
 
@@ -106,11 +104,45 @@ produce different pixels whenever TMDB promoted a different poster, while its
 and never written — the service keeps what it produces, not what it consumes.
 See [ADR 0007](docs/adr/0007-do-not-persist-source-artwork.md).
 
+## The badge, the caption, and one accolade per poster
+
+A poster carries **at most one badge**. That is a policy, not a capacity
+limit: the badge's job is to give the eye a single thing to land on above the
+artwork, and two of them say nothing because neither reads as the point. Pick
+the one that matters — an IMDb rank, an award nomination, a trending position.
+A request with more is rejected.
+
+Under the logo sits an optional caption, `"caption": { "genre": …, "rating": …
+}`, rendered as `Action · ★ 6.5`. Both halves are optional and either alone is
+a valid caption; the logo is lifted to clear it automatically. Omit the field
+entirely and the poster renders without it.
+
+### Colours are derived from the artwork
+
+Under the `standard` preset the badge is not a fixed colour. Its fill is the
+**dominant colour of the poster's top region** — the mode of a quantised
+histogram, with near-black and near-white excluded so that a vignette does not
+win — and its text is whichever of black and white has the higher WCAG
+contrast against that fill. A yellow poster gets a yellow badge with black
+text; a dark one gets a dark badge with white text, from the same rule.
+
+Two more treatments make that legible whatever the artwork does:
+
+- an **inset shadow** under the top edge, at 85% opacity on the first row and
+  released linearly to nothing by a quarter of the way down, so the badge sits
+  on a predictable ground;
+- a **tinted band** at the bottom that blends toward a dark warm neutral
+  rather than toward black, so a wall of posters shares one footing while the
+  blur keeps each one's own shapes visible through it.
+
 ## Presets
 
 `standard`, `cinematic`, `minimal`, `poster_wall`. Each sets the blur band
-height and sigma, the darkening strength, logo geometry and badge height; any
-of those can be overridden per request and is clamped after the merge.
+height and sigma, the darkening strength and colour, the top shadow, logo
+geometry, badge shape and caption style. `standard` is the only one that
+derives its badge colour from the artwork; the others keep fixed palettes and
+text-sized pills. The continuous values can be overridden per request and are
+clamped after the merge.
 
 ## Measured performance
 

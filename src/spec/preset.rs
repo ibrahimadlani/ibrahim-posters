@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::clamp;
+use crate::spec::colour::Rgb;
 use crate::spec::request::{LogoChoice, PosterChoice, PosterRequest, SpecError};
 use crate::spec::resolved::ResolvedSpec;
 use crate::tmdb::api::Artwork;
@@ -35,6 +36,78 @@ pub struct Preset {
     pub logo_bottom_fraction: f32,
     /// Badge row height in pixels at w1000.
     pub badge_height: u32,
+    /// Colour the band darkens toward.
+    ///
+    /// Black reproduces a plain darkening exactly, so a preset that names no
+    /// colour behaves as it always has.
+    #[serde(default = "black")]
+    pub band_colour: Rgb,
+    /// Fraction of the band over which its ramp rises to full opacity.
+    ///
+    /// Absent selects the quadratic ramp, which is what every preset but
+    /// `standard` wants; see [`crate::render::gradient::darken_alpha`].
+    #[serde(default)]
+    pub band_ramp_fraction: Option<f32>,
+    /// Peak opacity of the inset shadow along the top edge.
+    #[serde(default)]
+    pub top_shadow_strength: f32,
+    /// Height of the inset top shadow, as a fraction of poster height.
+    #[serde(default = "default_top_shadow_fraction")]
+    pub top_shadow_fraction: f32,
+    /// Badge width as a fraction of poster width.
+    ///
+    /// Zero sizes the badge to its own text, which is the older behaviour and
+    /// remains the default.
+    #[serde(default)]
+    pub badge_width_fraction: f32,
+    /// Distance from the top edge to the badge, as a fraction of height.
+    #[serde(default = "default_badge_top_fraction")]
+    pub badge_top_fraction: f32,
+    /// Whether the badge takes its fill and text colour from the artwork.
+    #[serde(default)]
+    pub badge_from_artwork: bool,
+    /// Caption text size in pixels at w1000.
+    #[serde(default = "default_caption_height")]
+    pub caption_height: u32,
+    /// Distance from the bottom edge to the caption, as a fraction of height.
+    #[serde(default = "default_caption_bottom_fraction")]
+    pub caption_bottom_fraction: f32,
+    /// Caption text colour.
+    #[serde(default = "default_caption_colour")]
+    pub caption_colour: Rgb,
+}
+
+/// Serde default for [`Preset::caption_height`].
+fn default_caption_height() -> u32 {
+    88
+}
+
+/// Serde default for [`Preset::caption_bottom_fraction`].
+fn default_caption_bottom_fraction() -> f32 {
+    0.107
+}
+
+/// Serde default for [`Preset::caption_colour`].
+fn default_caption_colour() -> Rgb {
+    Rgb::new(0xb8, 0xa8, 0xa0)
+}
+
+/// Serde default for [`Preset::band_colour`].
+fn black() -> Rgb {
+    Rgb::BLACK
+}
+
+/// Serde default for [`Preset::top_shadow_fraction`].
+///
+/// Only consulted when a preset sets a shadow strength without naming an
+/// extent, so the value matters just as a sensible companion to a strength.
+fn default_top_shadow_fraction() -> f32 {
+    0.25
+}
+
+/// Serde default for [`Preset::badge_top_fraction`].
+fn default_badge_top_fraction() -> f32 {
+    0.045
 }
 
 /// Returns the parsed preset catalogue.
@@ -123,6 +196,7 @@ impl Preset {
     ) -> Result<ResolvedSpec, SpecError> {
         let artwork = select(request, catalogue)?;
         let badges = request.normalised_badges()?;
+        let caption = request.normalised_caption()?;
         let overrides = request.overrides;
         let scale = request.width.scale();
 
@@ -163,6 +237,35 @@ impl Preset {
                 overrides.badge_height.unwrap_or(self.badge_height),
                 clamp::BADGE_HEIGHT,
             ) * request.width.pixel_scale(),
+            // The remaining fields describe the preset's identity rather than
+            // a knob a caller turns, so they are not overridable. A request
+            // that wants a different top shadow wants a different preset.
+            band_colour: self.band_colour,
+            band_ramp_fraction: self
+                .band_ramp_fraction
+                .map(|value| clamp::f32_into(value, clamp::BAND_RAMP_FRACTION)),
+            top_shadow_strength: clamp::f32_into(
+                self.top_shadow_strength,
+                clamp::TOP_SHADOW_STRENGTH,
+            ),
+            top_shadow_fraction: clamp::f32_into(
+                self.top_shadow_fraction,
+                clamp::TOP_SHADOW_FRACTION,
+            ),
+            badge_width_fraction: clamp::f32_into(
+                self.badge_width_fraction,
+                clamp::BADGE_WIDTH_FRACTION,
+            ),
+            badge_top_fraction: clamp::f32_into(self.badge_top_fraction, clamp::BADGE_TOP_FRACTION),
+            badge_from_artwork: self.badge_from_artwork,
+            caption,
+            caption_height: clamp::u32_into(self.caption_height, clamp::CAPTION_HEIGHT)
+                * request.width.pixel_scale(),
+            caption_bottom_fraction: clamp::f32_into(
+                self.caption_bottom_fraction,
+                clamp::CAPTION_BOTTOM_FRACTION,
+            ),
+            caption_colour: self.caption_colour,
         })
     }
 }
@@ -265,6 +368,7 @@ mod tests {
             logo: LogoChoice::Auto,
             preset: "standard".to_owned(),
             badges: Vec::new(),
+            caption: None,
             width: OutputWidth::W1000,
             overrides: Overrides::default(),
         }

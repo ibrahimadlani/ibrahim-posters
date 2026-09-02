@@ -20,6 +20,7 @@ use std::fmt::Write as _;
 use tiny_skia::{Pixmap, Transform};
 
 use crate::render::fonts;
+use crate::render::palette::BadgePalette;
 use crate::render::RenderError;
 use crate::spec::{Badge, BadgeStyle};
 
@@ -27,10 +28,39 @@ use crate::spec::{Badge, BadgeStyle};
 const PADDING_RATIO: f32 = 0.45;
 /// Gap between adjacent pills, as a fraction of pill height.
 const GAP_RATIO: f32 = 0.30;
-/// Font size, as a fraction of pill height.
+/// Font size of a text-sized pill, as a fraction of its height.
 const FONT_RATIO: f32 = 0.46;
-/// Corner radius, as a fraction of pill height. Half is a full stadium.
+
+/// Font size of a fixed-width bar, as a fraction of its height.
+///
+/// Larger than a pill's. A pill is sized to its text, so its height follows
+/// from the font; a bar's height is fixed and the text has to fill it, and at
+/// the pill's ratio it floats in the middle of a bar looking undersized.
+const BAR_FONT_RATIO: f32 = 0.60;
+/// Corner radius of a text-sized pill, as a fraction of height. Half is a
+/// full stadium.
 const RADIUS_RATIO: f32 = 0.5;
+
+/// Returns the font size for a badge of this height and layout mode.
+///
+/// Shared by measurement and by markup generation: sizing a pill from one
+/// ratio and drawing it with another produces badges whose text overflows
+/// them, and the two call sites are far enough apart to drift.
+fn font_size(height: f32, fixed_width: bool) -> f32 {
+    height
+        * if fixed_width {
+            BAR_FONT_RATIO
+        } else {
+            FONT_RATIO
+        }
+}
+
+/// Corner radius of a fixed-width bar, as a fraction of height.
+///
+/// A bar is several times wider than it is tall, and a stadium radius on that
+/// shape reads as a lozenge rather than as a rounded rectangle. The reference
+/// posters use roughly this value.
+const BAR_RADIUS_RATIO: f32 = 0.22;
 
 /// Geometry of one laid-out badge.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +82,9 @@ pub struct Layout {
     pub total_width: f32,
     /// Pill height in pixels.
     pub height: f32,
+    /// Whether each badge was given a fixed width rather than sized to its
+    /// own text. Determines the corner radius.
+    pub fixed_width: bool,
 }
 
 /// Lays out a badge row at the given pill height.
@@ -73,10 +106,14 @@ pub struct Layout {
 /// # Errors
 ///
 /// [`RenderError::Badges`] if the embedded font cannot be measured.
-pub fn layout(badges: &[Badge], height: f32) -> Result<Layout, RenderError> {
+pub fn layout(
+    badges: &[Badge],
+    height: f32,
+    fixed_width: Option<f32>,
+) -> Result<Layout, RenderError> {
     let padding = height * PADDING_RATIO;
     let gap = height * GAP_RATIO;
-    let font_size = height * FONT_RATIO;
+    let font_size = font_size(height, fixed_width.is_some());
 
     // Escaped before measuring, so the string measured is the string that
     // ends up in the rendered document. Measuring the raw text and escaping
@@ -91,7 +128,11 @@ pub fn layout(badges: &[Badge], height: f32) -> Result<Layout, RenderError> {
     let mut cursor = 0.0_f32;
 
     for (badge, text_width) in badges.iter().zip(text_widths) {
-        let width = text_width + padding * 2.0;
+        // A fixed width is a floor, never a ceiling: a badge is still allowed
+        // to grow past it rather than have its text clipped, because a
+        // clipped accolade is worse than an uneven row.
+        let natural = text_width + padding * 2.0;
+        let width = fixed_width.map_or(natural, |fixed| fixed.max(natural));
 
         boxes.push(BadgeBox {
             x: cursor,
@@ -108,6 +149,7 @@ pub fn layout(badges: &[Badge], height: f32) -> Result<Layout, RenderError> {
         boxes,
         total_width,
         height,
+        fixed_width: fixed_width.is_some(),
     })
 }
 
@@ -125,7 +167,10 @@ pub fn layout(badges: &[Badge], height: f32) -> Result<Layout, RenderError> {
 ///
 /// [`RenderError::Badges`] if the generated SVG cannot be parsed or
 /// rasterised.
-pub fn rasterise(layout: &Layout) -> Result<Option<Pixmap>, RenderError> {
+pub fn rasterise(
+    layout: &Layout,
+    derived: Option<BadgePalette>,
+) -> Result<Option<Pixmap>, RenderError> {
     if layout.boxes.is_empty() {
         return Ok(None);
     }
@@ -135,7 +180,7 @@ pub fn rasterise(layout: &Layout) -> Result<Option<Pixmap>, RenderError> {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let height = layout.height.ceil().max(1.0) as u32;
 
-    let markup = build_svg(layout);
+    let markup = build_svg(layout, derived);
 
     let options = usvg::Options {
         fontdb: fonts::database(),
@@ -157,10 +202,15 @@ pub fn rasterise(layout: &Layout) -> Result<Option<Pixmap>, RenderError> {
 /// is assembled from a typed [`Layout`] rather than from request fields, so
 /// the only caller-controlled value that reaches the markup is the badge text
 /// itself.
-fn build_svg(layout: &Layout) -> String {
+fn build_svg(layout: &Layout, derived: Option<BadgePalette>) -> String {
     let height = layout.height;
-    let radius = height * RADIUS_RATIO;
-    let font_size = height * FONT_RATIO;
+    let radius = height
+        * if layout.fixed_width {
+            BAR_RADIUS_RATIO
+        } else {
+            RADIUS_RATIO
+        };
+    let font_size = font_size(height, layout.fixed_width);
     // Optical centring: text sits slightly above the geometric centre because
     // most badge text has no descenders, and centring on the full em box
     // leaves it looking low.
@@ -171,8 +221,16 @@ fn build_svg(layout: &Layout) -> String {
         w = layout.total_width.max(1.0),
     );
 
+    // Colours derived from the artwork override the style's fixed palette:
+    // the point of deriving them is that they match this poster, which no
+    // fixed palette can do.
+    let derived = derived.map(|p| (p.fill.to_string(), p.ink.to_string()));
+
     for item in &layout.boxes {
-        let (fill, text_fill, stroke) = palette(item.badge.style);
+        let (fill, text_fill, stroke) = match &derived {
+            Some((fill, ink)) => (fill.as_str(), ink.as_str(), ""),
+            None => palette(item.badge.style),
+        };
         // Writing to a String is infallible; the Result exists only to
         // satisfy the fmt::Write signature.
         let _ = write!(
@@ -246,17 +304,18 @@ mod tests {
 
     #[test]
     fn an_empty_row_lays_out_to_nothing() {
-        let laid_out = layout(&[], 44.0).expect("lays out");
+        let laid_out = layout(&[], 44.0, None).expect("lays out");
         assert!(laid_out.boxes.is_empty());
         assert!(laid_out.total_width.abs() < f32::EPSILON);
-        assert!(rasterise(&laid_out).expect("rasterises").is_none());
+        assert!(rasterise(&laid_out, None).expect("rasterises").is_none());
     }
 
     #[test]
     fn pill_width_follows_text_width() {
         // The property that makes the row variable-width. A caller cannot
         // request a width, so a pill can never be narrower than its contents.
-        let laid_out = layout(&[badge("#1"), badge("#17 IMDb Top 250")], 44.0).expect("lays out");
+        let laid_out =
+            layout(&[badge("#1"), badge("#17 IMDb Top 250")], 44.0, None).expect("lays out");
         assert!(
             laid_out.boxes[1].width > laid_out.boxes[0].width,
             "longer text did not produce a wider pill"
@@ -267,7 +326,8 @@ mod tests {
     fn every_pill_is_wider_than_its_text() {
         let height = 44.0;
         let font_size = height * FONT_RATIO;
-        let laid_out = layout(&[badge("Oscar Nominee"), badge("W")], height).expect("lays out");
+        let laid_out =
+            layout(&[badge("Oscar Nominee"), badge("W")], height, None).expect("lays out");
 
         for item in &laid_out.boxes {
             let text = fonts::measure_all(&[&item.badge.text], font_size).expect("measures")[0];
@@ -281,8 +341,12 @@ mod tests {
 
     #[test]
     fn pills_do_not_overlap() {
-        let laid_out =
-            layout(&[badge("One"), badge("Two"), badge("Three, longer")], 44.0).expect("lays out");
+        let laid_out = layout(
+            &[badge("One"), badge("Two"), badge("Three, longer")],
+            44.0,
+            None,
+        )
+        .expect("lays out");
 
         for pair in laid_out.boxes.windows(2) {
             assert!(
@@ -296,7 +360,7 @@ mod tests {
 
     #[test]
     fn the_row_width_excludes_the_trailing_gap() {
-        let laid_out = layout(&[badge("A"), badge("B")], 40.0).expect("lays out");
+        let laid_out = layout(&[badge("A"), badge("B")], 40.0, None).expect("lays out");
         let last = laid_out.boxes.last().expect("non-empty");
         assert!(
             (laid_out.total_width - (last.x + last.width)).abs() < 0.001,
@@ -306,8 +370,8 @@ mod tests {
 
     #[test]
     fn layout_scales_with_height() {
-        let small = layout(&[badge("Oscar Nominee")], 40.0).expect("lays out");
-        let large = layout(&[badge("Oscar Nominee")], 80.0).expect("lays out");
+        let small = layout(&[badge("Oscar Nominee")], 40.0, None).expect("lays out");
+        let large = layout(&[badge("Oscar Nominee")], 80.0, None).expect("lays out");
         assert!(
             (large.total_width - small.total_width * 2.0).abs() < 0.01,
             "doubling the height did not double the row"
@@ -328,8 +392,8 @@ mod tests {
         // can close an element can still draw arbitrary shapes over the
         // poster, so it must not survive into the document as markup.
         let hostile = badge(r#"</text><rect width="9999" height="9999" fill="red"/>"#);
-        let laid_out = layout(&[hostile], 44.0).expect("lays out");
-        let markup = build_svg(&laid_out);
+        let laid_out = layout(&[hostile], 44.0, None).expect("lays out");
+        let markup = build_svg(&laid_out, None);
 
         assert!(
             !markup.contains("<rect width=\"9999\""),
@@ -339,14 +403,14 @@ mod tests {
 
         // And the document must still be valid: a broken escape would show up
         // as a parse failure rather than as an injection.
-        assert!(rasterise(&laid_out).expect("rasterises").is_some());
+        assert!(rasterise(&laid_out, None).expect("rasterises").is_some());
     }
 
     #[test]
     fn a_row_rasterises_to_its_laid_out_size() {
         let laid_out =
-            layout(&[badge("#17 IMDb"), badge("Oscar Nominee")], 44.0).expect("lays out");
-        let pixmap = rasterise(&laid_out)
+            layout(&[badge("#17 IMDb"), badge("Oscar Nominee")], 44.0, None).expect("lays out");
+        let pixmap = rasterise(&laid_out, None)
             .expect("rasterises")
             .expect("non-empty");
 
@@ -360,8 +424,8 @@ mod tests {
     fn a_rasterised_row_actually_draws_something() {
         // Guards the failure where geometry is correct, the SVG parses, and
         // nothing is painted -- which a size assertion alone would pass.
-        let laid_out = layout(&[badge("Oscar Nominee")], 44.0).expect("lays out");
-        let pixmap = rasterise(&laid_out)
+        let laid_out = layout(&[badge("Oscar Nominee")], 44.0, None).expect("lays out");
+        let pixmap = rasterise(&laid_out, None)
             .expect("rasterises")
             .expect("non-empty");
 
@@ -377,8 +441,8 @@ mod tests {
     fn text_is_drawn_inside_the_pill() {
         // A solid pill is white with near-black text. If the text were
         // missing or drawn outside, no dark pixels would appear.
-        let laid_out = layout(&[badge("Oscar Nominee")], 60.0).expect("lays out");
-        let pixmap = rasterise(&laid_out)
+        let laid_out = layout(&[badge("Oscar Nominee")], 60.0, None).expect("lays out");
+        let pixmap = rasterise(&laid_out, None)
             .expect("rasterises")
             .expect("non-empty");
 
@@ -399,10 +463,11 @@ mod tests {
                     style,
                 }],
                 44.0,
+                None,
             )
             .expect("lays out");
             assert!(
-                rasterise(&laid_out).expect("rasterises").is_some(),
+                rasterise(&laid_out, None).expect("rasterises").is_some(),
                 "{style:?} did not rasterise"
             );
         }
@@ -415,8 +480,8 @@ mod tests {
         // cache entry.
         let badges = [badge("#17 IMDb"), badge("Oscar Nominee")];
         assert_eq!(
-            layout(&badges, 44.0).expect("lays out"),
-            layout(&badges, 44.0).expect("lays out")
+            layout(&badges, 44.0, None).expect("lays out"),
+            layout(&badges, 44.0, None).expect("lays out")
         );
     }
 
@@ -424,7 +489,8 @@ mod tests {
     fn text_with_only_wide_characters_still_fits() {
         // Emoji and CJK measure far wider per character than Latin text; a
         // pill sized from a Latin assumption would clip them.
-        let laid_out = layout(&[badge("\u{1F3AC}\u{1F3AC}\u{1F3AC}")], 44.0).expect("lays out");
+        let laid_out =
+            layout(&[badge("\u{1F3AC}\u{1F3AC}\u{1F3AC}")], 44.0, None).expect("lays out");
         let font_size = 44.0 * FONT_RATIO;
         let text =
             fonts::measure_all(&["\u{1F3AC}\u{1F3AC}\u{1F3AC}"], font_size).expect("measures")[0];

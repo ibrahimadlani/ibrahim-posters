@@ -583,17 +583,14 @@ async fn w2000_renders_at_the_larger_size() {
 }
 
 #[tokio::test]
-async fn badges_and_a_logo_survive_the_round_trip() {
+async fn a_badge_and_a_logo_survive_the_round_trip() {
     let harness = Harness::new().await;
     let (status, created) = harness
         .post(json!({
             "tmdb_movie_id": 27205,
             "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
             "preset": "cinematic",
-            "badges": [
-                { "text": "#17 IMDb", "style": "accent" },
-                { "text": "Oscar Nominee", "style": "outline" }
-            ]
+            "badges": [{ "text": "#17 IMDb", "style": "accent" }]
         }))
         .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -601,6 +598,58 @@ async fn badges_and_a_logo_survive_the_round_trip() {
     let key = created["key"].as_str().expect("key");
     let response = harness.get(&format!("/v1/posters/{key}.webp")).await;
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_second_badge_is_refused() {
+    // One accolade per poster is a deliberate policy, so the rejection needs
+    // to name it rather than fail somewhere in the renderer.
+    let harness = Harness::new().await;
+    let (status, body) = harness
+        .post(json!({
+            "tmdb_movie_id": 27205,
+            "badges": [
+                { "text": "#17 IMDb" },
+                { "text": "Oscar Nominee" }
+            ]
+        }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["code"], "validation_failed");
+    let detail = body["detail"].as_str().expect("detail");
+    assert!(detail.contains('1'), "the limit is not stated: {detail}");
+}
+
+#[tokio::test]
+async fn a_caption_survives_the_round_trip() {
+    let harness = Harness::new().await;
+    let (status, created) = harness
+        .post(json!({
+            "tmdb_movie_id": 27205,
+            "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+            "caption": { "genre": "Action", "rating": 6.5 }
+        }))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let key = created["key"].as_str().expect("key");
+    let response = harness.get(&format!("/v1/posters/{key}.webp")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_caption_changes_the_render() {
+    // The caption is part of the cache key, so two requests that differ only
+    // in their caption must not collapse onto one poster.
+    let harness = Harness::new().await;
+    let (_, bare) = harness.post(json!({ "tmdb_movie_id": 27205 })).await;
+    let (_, captioned) = harness
+        .post(json!({
+            "tmdb_movie_id": 27205,
+            "caption": { "genre": "Action", "rating": 6.5 }
+        }))
+        .await;
+    assert_ne!(bare["key"], captioned["key"]);
 }
 
 #[tokio::test]

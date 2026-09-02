@@ -19,12 +19,14 @@
 //! being several times more expensive than it needs to be.
 
 pub mod clamp;
+pub mod colour;
 pub mod key;
 pub mod preset;
 pub mod request;
 pub mod resolved;
 
+pub use colour::Rgb;
 pub use key::CacheKey;
 pub use preset::{resolve, Preset};
-pub use request::{Badge, BadgeStyle, OutputWidth, Overrides, PosterRequest, SpecError};
+pub use request::{Badge, BadgeStyle, Caption, OutputWidth, Overrides, PosterRequest, SpecError};
 pub use resolved::ResolvedSpec;

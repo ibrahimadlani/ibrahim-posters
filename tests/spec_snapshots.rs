@@ -28,10 +28,8 @@ fn full_request_with_overrides() {
             "tmdb_movie_id": 27205,
             "preset": "cinematic",
             "logo": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
-            "badges": [
-                { "text": "#17 IMDb", "style": "accent" },
-                { "text": "Oscar Nominee", "style": "outline" }
-            ],
+            "badges": [{ "text": "#17 IMDb", "style": "accent" }],
+            "caption": { "genre": "Action", "rating": 6.5 },
             "width": "w2000",
             "overrides": { "blur_sigma": 30.0, "darken_strength": 0.8 }
         }"##,

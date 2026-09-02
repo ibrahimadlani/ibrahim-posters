@@ -15,3 +15,4 @@ marking the old one `Superseded by NNNN`.
 | [0006](0006-trunk-based-branching.md) | Trunk-based branching over git-flow | Accepted |
 | [0007](0007-do-not-persist-source-artwork.md) | Do not persist source artwork | Accepted |
 | [0008](0008-name-artwork-by-catalogue-identifier.md) | Name artwork by catalogue identifier | Accepted |
+| [0009](0009-derive-badge-colours-from-the-artwork.md) | Derive badge colours from the artwork | Accepted |

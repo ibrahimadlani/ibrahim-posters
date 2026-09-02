@@ -6,7 +6,7 @@
 
 use poster_service::spec::key::canonical_encoding;
 use poster_service::spec::request::{
-    Badge, BadgeStyle, LogoChoice, OutputWidth, Overrides, PosterChoice, PosterRequest,
+    Badge, BadgeStyle, Caption, LogoChoice, OutputWidth, Overrides, PosterChoice, PosterRequest,
 };
 use poster_service::spec::{clamp, preset};
 use poster_service::tmdb::api::{ArtworkOption, Catalogue, MediaKind};
@@ -39,6 +39,23 @@ fn any_badge() -> impl Strategy<Value = Badge> {
         ],
     )
         .prop_map(|(text, style)| Badge { text, style })
+}
+
+/// Generates captions, including the empty one and out-of-range ratings, so
+/// normalisation and clamping are exercised rather than assumed.
+///
+/// The genre stays inside [`clamp::CAPTION_GENRE_GRAPHEMES`] for the same
+/// reason [`any_badge`] stays inside its own limit: an over-long label is
+/// rejected by design, and generating one would spend the run on the
+/// rejection path rather than on the resolution logic.
+fn any_caption() -> impl Strategy<Value = Option<Caption>> {
+    proptest::option::of(
+        (
+            proptest::option::of("[ -~]{0,32}"),
+            proptest::option::of(any::<f32>()),
+        )
+            .prop_map(|(genre, rating)| Caption { genre, rating }),
+    )
 }
 
 /// Generates overrides across the full `f32` range, including out-of-range and
@@ -79,9 +96,10 @@ fn any_request_and_catalogue() -> impl Strategy<Value = (PosterRequest, Catalogu
         any_overrides(),
         any::<u32>(),
         prop_oneof![Just(true), Just(false)],
+        any_caption(),
     )
         .prop_map(
-            |(poster, logo, badges, width, kind, preset, overrides, id, omit_logo)| {
+            |(poster, logo, badges, width, kind, preset, overrides, id, omit_logo, caption)| {
                 let option = |path: &PosterPath| ArtworkOption {
                     path: path.clone(),
                     language: Some("en".to_owned()),
@@ -108,6 +126,7 @@ fn any_request_and_catalogue() -> impl Strategy<Value = (PosterRequest, Catalogu
                     },
                     preset: preset.to_owned(),
                     badges,
+                    caption,
                     width,
                     overrides,
                 };

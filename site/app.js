@@ -13,7 +13,7 @@ const state = {
   catalogue: null,
   poster: "auto",
   logo: "auto",
-  badges: [{ text: "#13 IMDb", style: "accent" }],
+  badges: [{ text: "#6 Today", style: "solid" }],
 };
 
 const baseUrl = () => el("base-url").value.replace(/\/+$/, "");
@@ -217,6 +217,15 @@ function buildRequest() {
   const badges = state.badges.filter((badge) => badge.text.trim());
   if (badges.length) request.badges = badges;
 
+  // Either half alone is a valid caption; both empty means no caption at all.
+  const genre = el("caption-genre").value.trim();
+  const rating = el("caption-rating").value.trim();
+  if (genre || rating) {
+    request.caption = {};
+    if (genre) request.caption.genre = genre;
+    if (rating) request.caption.rating = Number(rating);
+  }
+
   if (el("use-overrides").checked) {
     request.overrides = {
       blur_band_fraction: Number(el("blur-band").value),
@@ -333,7 +342,8 @@ function renderBadges() {
     row.append(text, style, remove);
     return row;
   }));
-  el("add-badge").disabled = state.badges.length >= 6;
+  // One badge per poster: the service rejects a second one.
+  el("add-badge").disabled = state.badges.length >= 1;
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -395,7 +405,8 @@ el("use-overrides").onchange = (event) => {
   updatePreview();
 };
 for (const id of ["base-url", "tmdb-id", "language", "preset", "width",
-                  "blur-band", "blur-sigma", "darken", "logo-width"]) {
+                  "blur-band", "blur-sigma", "darken", "logo-width",
+                  "caption-genre", "caption-rating"]) {
   el(id).addEventListener("input", updatePreview);
 }
 el("base-url").addEventListener("change", checkService);

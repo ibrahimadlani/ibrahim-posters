@@ -186,6 +186,32 @@ pub fn canonical_encoding(spec: &ResolvedSpec) -> Vec<u8> {
     push_f32(&mut out, spec.logo_width_fraction);
     push_f32(&mut out, spec.logo_bottom_fraction);
     out.extend_from_slice(&spec.badge_height.to_le_bytes());
+    out.extend_from_slice(&spec.band_colour.to_bytes());
+    match spec.band_ramp_fraction {
+        None => out.push(0),
+        Some(fraction) => {
+            out.push(1);
+            push_f32(&mut out, fraction);
+        }
+    }
+    push_f32(&mut out, spec.top_shadow_strength);
+    push_f32(&mut out, spec.top_shadow_fraction);
+    push_f32(&mut out, spec.badge_width_fraction);
+    push_f32(&mut out, spec.badge_top_fraction);
+    out.push(u8::from(spec.badge_from_artwork));
+    match &spec.caption {
+        None => out.push(0),
+        Some(caption) => {
+            out.push(1);
+            // The rendered line rather than the two fields: it is what the
+            // renderer consumes, and encoding it keeps two spellings of the
+            // same visible caption on one key.
+            push_str(&mut out, &caption.line());
+        }
+    }
+    out.extend_from_slice(&spec.caption_height.to_le_bytes());
+    push_f32(&mut out, spec.caption_bottom_fraction);
+    out.extend_from_slice(&spec.caption_colour.to_bytes());
 
     out
 }
@@ -290,32 +316,52 @@ mod tests {
     }
 
     #[test]
-    fn badge_boundaries_are_unambiguous() {
+    fn string_boundaries_are_unambiguous() {
         // The case length prefixes exist for: without them these two encode
-        // identically and collide onto one cache entry.
+        // identically and collide onto one cache entry. A poster carries one
+        // badge, so the adjacent pair that can still run together is the
+        // badge text and the caption's genre.
         let ab_c = spec_from(
             r#"{ "tmdb_movie_id": 27205,
-                 "badges": [{ "text": "ab" }, { "text": "c" }] }"#,
+                 "badges": [{ "text": "ab" }],
+                 "caption": { "genre": "c" } }"#,
         );
         let a_bc = spec_from(
             r#"{ "tmdb_movie_id": 27205,
-                 "badges": [{ "text": "a" }, { "text": "bc" }] }"#,
+                 "badges": [{ "text": "a" }],
+                 "caption": { "genre": "bc" } }"#,
         );
         assert_ne!(canonical_encoding(&ab_c), canonical_encoding(&a_bc));
         assert_ne!(ab_c.cache_key(), a_bc.cache_key());
     }
 
     #[test]
-    fn badge_order_is_significant() {
-        let forward = spec_from(
+    fn a_caption_changes_the_key() {
+        let bare = base();
+        let captioned =
+            spec_from(r#"{ "tmdb_movie_id": 27205, "caption": { "genre": "Action" } }"#);
+        let rated = spec_from(
             r#"{ "tmdb_movie_id": 27205,
-                 "badges": [{ "text": "a" }, { "text": "b" }] }"#,
+                 "caption": { "genre": "Action", "rating": 6.5 } }"#,
         );
-        let reverse = spec_from(
-            r#"{ "tmdb_movie_id": 27205,
-                 "badges": [{ "text": "b" }, { "text": "a" }] }"#,
-        );
-        assert_ne!(forward.cache_key(), reverse.cache_key());
+        assert_ne!(bare.cache_key(), captioned.cache_key());
+        assert_ne!(captioned.cache_key(), rated.cache_key());
+    }
+
+    #[test]
+    fn an_empty_caption_keys_the_same_as_none() {
+        // A caption with nothing in it renders nothing, so it must not split
+        // the cache entry away from a request that omitted it entirely.
+        let empty = spec_from(r#"{ "tmdb_movie_id": 27205, "caption": {} }"#);
+        assert_eq!(base().cache_key(), empty.cache_key());
+    }
+
+    #[test]
+    fn badge_text_is_significant() {
+        let one = spec_from(r#"{ "tmdb_movie_id": 27205, "badges": [{ "text": "a" }] }"#);
+        let other = spec_from(r#"{ "tmdb_movie_id": 27205, "badges": [{ "text": "b" }] }"#);
+        assert_ne!(one.cache_key(), other.cache_key());
+        assert_ne!(base().cache_key(), one.cache_key());
     }
 
     #[test]

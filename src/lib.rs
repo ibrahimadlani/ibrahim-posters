@@ -56,4 +56,4 @@ pub mod tmdb;
 /// and nothing can correct it.
 ///
 /// See `docs/adr/0005-content-addressed-cache-keys.md`.
-pub const RENDER_VERSION: u32 = 1;
+pub const RENDER_VERSION: u32 = 2;
