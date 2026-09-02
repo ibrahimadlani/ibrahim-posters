@@ -19,8 +19,15 @@ pub enum SpecError {
     /// The named preset is not in the catalogue.
     #[error("unknown preset: {0}")]
     UnknownPreset(String),
-    /// More badges than the top row can hold.
-    #[error("at most {max} badges are allowed, found {found}")]
+    /// More badges than the one-per-poster policy allows.
+    ///
+    /// The noun is pluralised against `max` rather than hardcoded. The limit
+    /// is one today, so a fixed "badges" reads as a typo in the one message a
+    /// caller actually sees when they hit it.
+    #[error(
+        "a poster carries at most {max} {}, found {found}",
+        if *max == 1 { "badge" } else { "badges" }
+    )]
     TooManyBadges {
         /// Configured maximum.
         max: usize,
@@ -518,6 +525,19 @@ mod tests {
             text: text.to_owned(),
             style: BadgeStyle::Solid,
         }
+    }
+
+    #[test]
+    fn the_badge_limit_error_agrees_with_itself_grammatically() {
+        // The limit is one, so the message a caller sees must not read
+        // "at most 1 badges".
+        let single = SpecError::TooManyBadges { max: 1, found: 2 }.to_string();
+        assert!(single.contains("at most 1 badge,"), "{single}");
+        assert!(!single.contains("badges"), "{single}");
+
+        // And it must still read correctly if the policy is ever relaxed.
+        let plural = SpecError::TooManyBadges { max: 3, found: 5 }.to_string();
+        assert!(plural.contains("at most 3 badges,"), "{plural}");
     }
 
     #[test]
